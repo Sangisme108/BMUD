@@ -1,0 +1,7 @@
+frontend/build/
+frontend/.dart_tool/
+backend/node_modules/
+backend/.env
+.DS_Store
+.idea/
+.vscode/
