@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -7,17 +8,17 @@ import '../models/login_history.dart';
 import 'auth_service.dart';
 
 class SecurityService {
+  static const _requestTimeout = Duration(seconds: 15);
   final AuthService _authService = AuthService();
 
   Future<List<LoginHistory>> getLoginHistory() async {
-    final response = await http.get(
-      Uri.parse('${ApiConfig.baseUrl}/security/login-history'),
-      headers: await _headers(),
-    );
-
+    final response = await _authorizedGet('/security/login-history');
     final data = _decode(response);
     if (response.statusCode >= 400) {
-      throw Exception(data['message'] ?? 'Không tải được lịch sử đăng nhập');
+      throw ApiException(
+        data['message']?.toString() ?? 'Không tải được lịch sử đăng nhập',
+        statusCode: response.statusCode,
+      );
     }
 
     final items = data['data'] as List<dynamic>;
@@ -27,16 +28,42 @@ class SecurityService {
   }
 
   Future<Map<String, dynamic>> getDashboard() async {
-    final response = await http.get(
-      Uri.parse('${ApiConfig.baseUrl}/security/dashboard'),
-      headers: await _headers(),
-    );
-
+    final response = await _authorizedGet('/security/dashboard');
     final data = _decode(response);
     if (response.statusCode >= 400) {
-      throw Exception(data['message'] ?? 'Không tải được dashboard');
+      throw ApiException(
+        data['message']?.toString() ?? 'Không tải được dashboard',
+        statusCode: response.statusCode,
+      );
     }
     return data;
+  }
+
+  Future<http.Response> _authorizedGet(String path) async {
+    try {
+      var response = await http
+          .get(
+            Uri.parse('${ApiConfig.baseUrl}$path'),
+            headers: await _headers(),
+          )
+          .timeout(_requestTimeout);
+
+      if (response.statusCode == 401 && await _authService.refreshSession()) {
+        response = await http
+            .get(
+              Uri.parse('${ApiConfig.baseUrl}$path'),
+              headers: await _headers(),
+            )
+            .timeout(_requestTimeout);
+      }
+      return response;
+    } on TimeoutException {
+      throw const ApiException('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
+    } on ApiException {
+      rethrow;
+    } on Exception catch (error) {
+      throw ApiException('Không thể kết nối máy chủ: $error');
+    }
   }
 
   Future<Map<String, String>> _headers() async {
@@ -48,6 +75,14 @@ class SecurityService {
   }
 
   Map<String, dynamic> _decode(http.Response response) {
-    return jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    try {
+      return jsonDecode(utf8.decode(response.bodyBytes))
+          as Map<String, dynamic>;
+    } on FormatException {
+      throw ApiException(
+        'Phản hồi từ máy chủ không hợp lệ',
+        statusCode: response.statusCode,
+      );
+    }
   }
 }

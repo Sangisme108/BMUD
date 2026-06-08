@@ -8,7 +8,8 @@ const securityRoutes = require('./routes/securityRoutes');
 
 const app = express();
 
-app.set('trust proxy', 1);
+const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || '1', 10);
+app.set('trust proxy', Number.isNaN(trustProxyHops) ? 1 : trustProxyHops);
 
 app.use(cors({ origin: '*', credentials: false }));
 app.use(express.json());

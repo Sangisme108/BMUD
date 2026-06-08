@@ -2,15 +2,22 @@ const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const createTransporter = () => {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+  const emailUser = process.env.EMAIL_USER?.trim();
+  const emailPass = process.env.EMAIL_PASS?.trim();
+  if (
+    !emailUser ||
+    !emailPass ||
+    emailUser.startsWith('your_') ||
+    emailPass.startsWith('your_')
+  ) {
     return null;
   }
 
   return nodemailer.createTransport({
     service: 'gmail',
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      user: emailUser,
+      pass: emailPass,
     },
   });
 };

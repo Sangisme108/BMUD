@@ -90,7 +90,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   decoration: const InputDecoration(labelText: 'Password'),
                   validator: (value) {
                     if (value == null || value.isEmpty) return 'Nhập mật khẩu';
-                    if (value.length < 6) return 'Mật khẩu ít nhất 6 ký tự';
+                    if (value.length < 8) return 'Mật khẩu ít nhất 8 ký tự';
                     return null;
                   },
                 ),

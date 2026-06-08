@@ -1,115 +1,89 @@
 const pool = require('../config/db');
 
-const getRiskScore = (riskLevel) => {
-  if (riskLevel === 'HIGH') return 3;
-  if (riskLevel === 'MEDIUM') return 2;
-  return 1;
+const classifyRisk = (score) => {
+  if (score >= 50) return 'HIGH';
+  if (score >= 20) return 'MEDIUM';
+  return 'LOW';
 };
 
-const detectLoginRisk = async ({ userId, email, ipAddress, userAgent, deviceFingerprint }) => {
+const detectLoginRisk = async ({
+  userId,
+  email,
+  ipAddress,
+  userAgent,
+  deviceFingerprint,
+}) => {
+  let score = 0;
   const reasons = [];
-  let riskLevel = 'LOW';
 
-  const [[failedStats]] = await pool.query(
-    `SELECT COUNT(*) AS total
-     FROM failed_login_attempts
-     WHERE email = ? AND attempt_time >= (NOW() - INTERVAL 15 MINUTE)`,
-    [email]
-  );
-
-  const [[historyStats]] = await pool.query(
-    `SELECT COUNT(*) AS total
-     FROM login_history
-     WHERE user_id = ? AND login_status = 'SUCCESS'`,
-    [userId]
-  );
-
-  if ((historyStats.total || 0) === 0) {
-    return {
-      riskLevel: 'LOW',
-      reason: 'Lần đăng nhập thành công đầu tiên, dùng làm dữ liệu tin cậy ban đầu',
-    };
-  }
-
-  const [[knownIp]] = await pool.query(
-    `SELECT id FROM login_history
-     WHERE user_id = ? AND ip_address = ? AND login_status = 'SUCCESS'
-     LIMIT 1`,
-    [userId, ipAddress]
-  );
-
-  const [[knownUserAgent]] = await pool.query(
-    `SELECT id FROM login_history
-     WHERE user_id = ? AND user_agent = ? AND login_status = 'SUCCESS'
-     LIMIT 1`,
-    [userId, userAgent]
-  );
-
-  const [[trustedDevice]] = await pool.query(
-    `SELECT id FROM trusted_devices
+  const [[device]] = await pool.query(
+    `SELECT id, is_trusted
+     FROM devices
      WHERE user_id = ? AND device_fingerprint = ?
      LIMIT 1`,
     [userId, deviceFingerprint]
   );
 
-  const [[commonHour]] = await pool.query(
-    `SELECT HOUR(login_time) AS login_hour, COUNT(*) AS total
-     FROM login_history
-     WHERE user_id = ? AND login_status = 'SUCCESS'
-     GROUP BY HOUR(login_time)
-     ORDER BY total DESC
+  if (!device || !device.is_trusted) {
+    score += 30;
+    reasons.push('Thiết bị mới hoặc chưa được tin cậy');
+  }
+
+  const [[lastSuccess]] = await pool.query(
+    `SELECT ip_address, user_agent
+     FROM login_attempts
+     WHERE user_id = ? AND is_successful = TRUE
+     ORDER BY created_at DESC
      LIMIT 1`,
     [userId]
   );
 
+  if (lastSuccess && lastSuccess.ip_address !== ipAddress) {
+    score += 15;
+    reasons.push('Địa chỉ IP khác lần đăng nhập thành công gần nhất');
+  }
+
+  if (lastSuccess && (lastSuccess.user_agent || '') !== userAgent) {
+    score += 10;
+    reasons.push('User-Agent khác lần đăng nhập thành công gần nhất');
+  }
+
   const currentHour = new Date().getHours();
-  const failedCount = failedStats.total || 0;
-  const isNewIp = !knownIp;
-  const isNewDevice = !trustedDevice;
-  const isNewUserAgent = !knownUserAgent;
-  const isUnusualHour =
-    commonHour && Math.abs(Number(commonHour.login_hour) - currentHour) >= 6;
+  if (currentHour >= 1 && currentHour <= 5) {
+    score += 10;
+    reasons.push('Đăng nhập trong khung giờ bất thường từ 01:00 đến 05:59');
+  }
 
+  const [[failedStats]] = await pool.query(
+    `SELECT COUNT(*) AS total
+     FROM login_attempts
+     WHERE email = ?
+       AND failure_type = 'INVALID_CREDENTIALS'
+       AND is_resolved = FALSE
+       AND created_at >= (NOW() - INTERVAL 15 MINUTE)`,
+    [email]
+  );
+
+  const failedCount = Number(failedStats.total || 0);
   if (failedCount >= 5) {
-    riskLevel = 'HIGH';
-    reasons.push('Có nhiều lần đăng nhập thất bại trong 15 phút gần đây');
-  }
-
-  if (isNewIp && isNewDevice) {
-    riskLevel = 'HIGH';
-    reasons.push('Đăng nhập từ IP mới và thiết bị mới');
-  } else {
-    if (isNewIp) {
-      riskLevel = getRiskScore(riskLevel) < 2 ? 'MEDIUM' : riskLevel;
-      reasons.push('Đăng nhập từ IP mới');
-    }
-
-    if (isNewDevice) {
-      riskLevel = getRiskScore(riskLevel) < 2 ? 'MEDIUM' : riskLevel;
-      reasons.push('Đăng nhập từ thiết bị mới');
-    }
-  }
-
-  if (isNewUserAgent) {
-    riskLevel = getRiskScore(riskLevel) < 2 ? 'MEDIUM' : riskLevel;
-    reasons.push('User-Agent mới');
-  }
-
-  if (isUnusualHour) {
-    riskLevel = getRiskScore(riskLevel) < 2 ? 'MEDIUM' : riskLevel;
-    reasons.push('Đăng nhập ngoài khung giờ thường dùng');
-  }
-
-  if (reasons.length === 0) {
-    reasons.push('IP và thiết bị đã từng đăng nhập, không có dấu hiệu bất thường');
+    score += 40;
+    reasons.push('Có ít nhất 5 lần nhập sai mật khẩu trong 15 phút');
+  } else if (failedCount >= 3) {
+    score += 20;
+    reasons.push('Có ít nhất 3 lần nhập sai mật khẩu trong 15 phút');
   }
 
   return {
-    riskLevel,
-    reason: reasons.join('; '),
+    riskScore: score,
+    riskLevel: classifyRisk(score),
+    reasons,
+    reason: reasons.length > 0
+      ? reasons.join('; ')
+      : 'Không phát hiện dấu hiệu đăng nhập bất thường',
   };
 };
 
 module.exports = {
+  classifyRisk,
   detectLoginRisk,
 };

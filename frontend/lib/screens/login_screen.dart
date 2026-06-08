@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
+import '../services/device_service.dart';
+import 'account_recovery_request_screen.dart';
 import 'home_screen.dart';
+import 'otp_verification_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -15,45 +18,55 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _deviceController = TextEditingController(text: 'My Phone');
   final _authService = AuthService();
+  final _deviceService = DeviceService();
 
   bool _loading = false;
-  String? _riskLevel;
   String? _message;
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
-
     setState(() {
       _loading = true;
       _message = null;
-      _riskLevel = null;
     });
 
     try {
+      final fingerprint = await _deviceService.getDeviceFingerprint();
       final result = await _authService.login(
         email: _emailController.text.trim(),
         password: _passwordController.text,
-        deviceName: _deviceController.text.trim(),
+        deviceFingerprint: fingerprint,
       );
 
-      setState(() {
-        _riskLevel = result['risk_level']?.toString();
-        _message = result['message']?.toString();
-      });
+      if (!mounted) return;
+      if (result.requiresOtp) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OtpVerificationScreen(
+              email: _emailController.text.trim(),
+              deviceFingerprint: fingerprint,
+              debugOtp: result.data['debug_otp']?.toString(),
+            ),
+          ),
+        );
+        return;
+      }
 
-      if (!mounted) return;
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      if (!mounted) return;
-      Navigator.pushReplacement(
+      Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => HomeScreen(userJson: result['user'])),
+        MaterialPageRoute(
+          builder: (_) => HomeScreen(userJson: result.data['user']),
+        ),
+        (_) => false,
       );
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _message = error.message);
     } catch (error) {
-      setState(
-        () => _message = error.toString().replaceFirst('Exception: ', ''),
-      );
+      if (mounted) {
+        setState(() => _message = 'Không thể đọc thông tin thiết bị: $error');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -63,7 +76,6 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
-    _deviceController.dispose();
     super.dispose();
   }
 
@@ -86,29 +98,34 @@ class _LoginScreenState extends State<LoginScreen> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Thiết bị được nhận diện tự động và không hiển thị trên giao diện.',
+                  ),
                   const SizedBox(height: 24),
                   TextFormField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
+                    autofillHints: const [AutofillHints.email],
                     decoration: const InputDecoration(labelText: 'Email'),
-                    validator: (value) =>
-                        value == null || value.isEmpty ? 'Nhập email' : null,
+                    validator: (value) {
+                      final email = value?.trim() ?? '';
+                      if (email.isEmpty) return 'Nhập email';
+                      if (!email.contains('@')) return 'Email không hợp lệ';
+                      return null;
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _passwordController,
                     obscureText: true,
-                    decoration: const InputDecoration(labelText: 'Password'),
+                    autofillHints: const [AutofillHints.password],
+                    decoration: const InputDecoration(labelText: 'Mật khẩu'),
                     validator: (value) =>
                         value == null || value.isEmpty ? 'Nhập mật khẩu' : null,
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _deviceController,
-                    decoration: const InputDecoration(labelText: 'Device name'),
-                    validator: (value) => value == null || value.isEmpty
-                        ? 'Nhập tên thiết bị'
-                        : null,
+                    onFieldSubmitted: (_) {
+                      if (!_loading) _login();
+                    },
                   ),
                   const SizedBox(height: 20),
                   FilledButton(
@@ -122,23 +139,59 @@ class _LoginScreenState extends State<LoginScreen> {
                         : const Text('Đăng nhập'),
                   ),
                   TextButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const RegisterScreen(),
-                        ),
-                      );
-                    },
+                    onPressed: _loading
+                        ? null
+                        : () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => AccountRecoveryRequestScreen(
+                                  type: RecoveryRequestType.resetPassword,
+                                  initialEmail: _emailController.text.trim(),
+                                ),
+                              ),
+                            );
+                          },
+                    child: const Text('Quên mật khẩu?'),
+                  ),
+                  TextButton(
+                    onPressed: _loading
+                        ? null
+                        : () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => AccountRecoveryRequestScreen(
+                                  type: RecoveryRequestType.unlockAccount,
+                                  initialEmail: _emailController.text.trim(),
+                                ),
+                              ),
+                            );
+                          },
+                    child: const Text('Tài khoản bị khóa?'),
+                  ),
+                  TextButton(
+                    onPressed: _loading
+                        ? null
+                        : () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const RegisterScreen(),
+                              ),
+                            );
+                          },
                     child: const Text('Chưa có tài khoản? Đăng ký'),
                   ),
                   if (_message != null) ...[
                     const SizedBox(height: 12),
-                    Text(_message!, textAlign: TextAlign.center),
-                  ],
-                  if (_riskLevel != null) ...[
-                    const SizedBox(height: 8),
-                    Center(child: Text('Risk level: $_riskLevel')),
+                    Text(
+                      _message!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
                   ],
                 ],
               ),

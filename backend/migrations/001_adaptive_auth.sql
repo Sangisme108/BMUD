@@ -1,21 +1,8 @@
-CREATE DATABASE IF NOT EXISTS abnormal_login_detection
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
+ALTER TABLE users
+  ADD COLUMN is_locked BOOLEAN NOT NULL DEFAULT FALSE AFTER password_hash,
+  ADD COLUMN lock_until DATETIME NULL AFTER is_locked;
 
-USE abnormal_login_detection;
-
-CREATE TABLE IF NOT EXISTS users (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  full_name VARCHAR(120) NOT NULL,
-  email VARCHAR(180) NOT NULL UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
-  is_locked BOOLEAN NOT NULL DEFAULT FALSE,
-  lock_until DATETIME NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS devices (
+CREATE TABLE devices (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   device_fingerprint VARCHAR(64) NOT NULL,
@@ -31,7 +18,7 @@ CREATE TABLE IF NOT EXISTS devices (
   INDEX idx_devices_user (user_id)
 );
 
-CREATE TABLE IF NOT EXISTS login_attempts (
+CREATE TABLE login_attempts (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NULL,
   email VARCHAR(180) NOT NULL,
@@ -55,7 +42,7 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   INDEX idx_login_attempts_failure_time (failure_type, created_at)
 );
 
-CREATE TABLE IF NOT EXISTS auth_otps (
+CREATE TABLE auth_otps (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   email VARCHAR(180) NOT NULL,
@@ -76,7 +63,7 @@ CREATE TABLE IF NOT EXISTS auth_otps (
   INDEX idx_auth_otps_lookup (email, device_fingerprint, created_at)
 );
 
-CREATE TABLE IF NOT EXISTS refresh_tokens (
+CREATE TABLE refresh_tokens (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   token_hash VARCHAR(64) NOT NULL UNIQUE,
@@ -87,37 +74,4 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     FOREIGN KEY (user_id) REFERENCES users(id)
     ON DELETE CASCADE,
   INDEX idx_refresh_tokens_user (user_id)
-);
-
-CREATE TABLE IF NOT EXISTS account_action_tokens (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  user_id INT NOT NULL,
-  token_hash VARCHAR(64) NOT NULL UNIQUE,
-  action_type ENUM('UNLOCK_ACCOUNT', 'RESET_PASSWORD') NOT NULL,
-  expires_at DATETIME NOT NULL,
-  used_at DATETIME NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_account_action_tokens_user
-    FOREIGN KEY (user_id) REFERENCES users(id)
-    ON DELETE CASCADE,
-  INDEX idx_account_action_lookup (action_type, token_hash, expires_at),
-  INDEX idx_account_action_user (user_id, action_type)
-);
-
--- Legacy table retained so existing history/dashboard code remains compatible.
-CREATE TABLE IF NOT EXISTS login_history (
-  id INT AUTO_INCREMENT PRIMARY KEY,
-  user_id INT NOT NULL,
-  ip_address VARCHAR(64) NOT NULL,
-  user_agent TEXT,
-  device_name VARCHAR(120),
-  login_status ENUM('SUCCESS', 'FAILED') NOT NULL,
-  risk_level ENUM('LOW', 'MEDIUM', 'HIGH') NOT NULL DEFAULT 'LOW',
-  reason TEXT,
-  login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_login_history_user
-    FOREIGN KEY (user_id) REFERENCES users(id)
-    ON DELETE CASCADE,
-  INDEX idx_login_history_user_time (user_id, login_time),
-  INDEX idx_login_history_risk (risk_level)
 );

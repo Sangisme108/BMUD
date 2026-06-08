@@ -1,5 +1,37 @@
 # BMUD
 
+## Adaptive authentication migration
+
+After pulling the adaptive-authentication changes, update `backend/.env` with
+separate long random values for `JWT_SECRET`, `JWT_REFRESH_SECRET`, and
+`OTP_SECRET`, then run:
+
+```powershell
+cd backend
+npm install
+npm run migrate
+npm run dev
+```
+
+The first successful password check from a new device returns HTTP `202` and
+requires OTP verification before tokens are issued. In development, when SMTP
+is not configured, the OTP is returned as `debug_otp`; production never returns
+the OTP in the API response.
+
+Password recovery and account unlock use one-time email links:
+
+```text
+POST /api/auth/forgot-password
+POST /api/auth/reset-password
+POST /api/auth/request-unlock
+POST /api/auth/unlock-account
+```
+
+The mobile app handles links with the custom scheme
+`bmud://account-action`. Reset links expire after 30 minutes; unlock links
+expire after 15 minutes. A successful password reset revokes every existing
+refresh token.
+
 # Hệ thống phát hiện hành vi đăng nhập bất thường trên Web/Mobile
 
 ## 1. Giới thiệu đề tài
@@ -72,8 +104,10 @@ Các bảng chính:
 
 - `users`: thông tin tài khoản.
 - `login_history`: lịch sử đăng nhập và mức rủi ro.
-- `failed_login_attempts`: các lần đăng nhập thất bại.
-- `trusted_devices`: thiết bị đã từng đăng nhập thành công.
+- `login_attempts`: audit đăng nhập, điểm và mức rủi ro.
+- `devices`: thiết bị đã xác thực và trạng thái tin cậy.
+- `auth_otps`: thử thách OTP có thời hạn.
+- `refresh_tokens`: refresh token đã băm và trạng thái thu hồi.
 
 ## 6. API endpoints
 
@@ -85,7 +119,7 @@ Các bảng chính:
 {
   "full_name": "Nguyen Van A",
   "email": "a@example.com",
-  "password": "123456"
+  "password": "TestPass123!"
 }
 ```
 
@@ -94,21 +128,26 @@ Các bảng chính:
 ```json
 {
   "email": "a@example.com",
-  "password": "123456",
-  "device_name": "iPhone 15"
+  "password": "TestPass123!",
+  "device_fingerprint": "<sha256-64-hex-characters>"
 }
 ```
 
-Response thành công:
+Response LOW thành công:
 
 ```json
 {
-  "token": "...",
+  "access_token": "...",
+  "refresh_token": "...",
   "user": {},
+  "risk_score": 0,
   "risk_level": "LOW",
   "message": "Đăng nhập thành công"
 }
 ```
+
+Response MEDIUM trả HTTP `202` và yêu cầu gọi
+`POST /api/auth/verify-otp` trước khi cấp token.
 
 ### User API
 
@@ -194,16 +233,16 @@ static const String baseUrl = 'http://192.168.1.10:5000/api';
 ### Demo 1: Đăng nhập bình thường
 
 1. Đăng ký tài khoản mới.
-2. Đăng nhập lần đầu với email, password và `device_name`.
-3. Backend lưu lịch sử đăng nhập, tạo thiết bị tin cậy ban đầu.
-4. `risk_level = LOW`.
+2. Đăng nhập lần đầu; Flutter tự gửi `device_fingerprint`.
+3. Thiết bị mới nhận 30 điểm, API trả HTTP `202`.
+4. Nhập OTP để tin cậy thiết bị và nhận access/refresh token.
 
 ### Demo 2: Đăng nhập từ thiết bị mới
 
 1. Đăng xuất.
-2. Đăng nhập lại cùng tài khoản nhưng đổi `device_name`, ví dụ từ `My Phone` sang `Laptop`.
+2. Đăng nhập từ một thiết bị hoặc bản cài đặt ứng dụng khác.
 3. Backend phát hiện thiết bị mới.
-4. `risk_level = MEDIUM`, hệ thống gửi email cảnh báo nếu SMTP đã cấu hình.
+4. `risk_level = MEDIUM`, hệ thống bắt buộc xác thực OTP.
 
 ### Demo 3: Đăng nhập từ IP/User-Agent mới
 
@@ -215,8 +254,8 @@ static const String baseUrl = 'http://192.168.1.10:5000/api';
 ### Demo 4: Sai mật khẩu nhiều lần
 
 1. Nhập sai mật khẩu 5 lần trong 15 phút.
-2. Backend lưu các lần thất bại vào `failed_login_attempts`.
-3. API trả về cảnh báo brute force với HTTP `429`.
+2. Backend lưu các lần thất bại vào `login_attempts`.
+3. Sau 5 lần sai, tài khoản bị khóa 15 phút và API trả HTTP `423`.
 4. Lần đăng nhập đúng sau đó vẫn xét lịch sử thất bại gần đây để tăng rủi ro.
 
 ### Demo 5: Dashboard bảo mật
