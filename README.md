@@ -38,6 +38,22 @@ Brute-force protection uses separate limits in a 15-minute window:
 - Twenty-five failures from a non-loopback IP temporarily block that IP.
 - Loopback IPs are excluded from the global IP block for local emulator use.
 
+## TiDB Cloud
+
+TiDB Cloud Starter requires TLS. Create the database in TiDB Cloud first, then
+set the backend environment:
+
+```env
+DB_HOST=<tidb-host>
+DB_PORT=4000
+DB_USER=<tidb-user>
+DB_PASSWORD=<tidb-password>
+DB_NAME=abnormal_login_detection
+DB_SSL=true
+```
+
+Run `npm run migrate` once to create the application tables.
+
 # Hệ thống phát hiện hành vi đăng nhập bất thường trên Web/Mobile
 
 ## 1. Giới thiệu đề tài
