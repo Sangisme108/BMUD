@@ -18,7 +18,7 @@ requires OTP verification before tokens are issued. In development, when SMTP
 is not configured, the OTP is returned as `debug_otp`; production never returns
 the OTP in the API response.
 
-Password recovery and account unlock use one-time email links:
+Password recovery and account unlock use one-time email OTP codes:
 
 ```text
 POST /api/auth/forgot-password
@@ -27,10 +27,16 @@ POST /api/auth/request-unlock
 POST /api/auth/unlock-account
 ```
 
-The mobile app handles links with the custom scheme
-`bmud://account-action`. Reset links expire after 30 minutes; unlock links
-expire after 15 minutes. A successful password reset revokes every existing
-refresh token.
+Recovery OTP codes contain six digits, expire after five minutes, and allow at
+most five incorrect submissions. A successful password reset unlocks the
+account and revokes every existing refresh token.
+
+Brute-force protection uses separate limits in a 15-minute window:
+
+- Five failures for one account lock that account for 15 minutes.
+- Five failures for the same email and IP temporarily block that pair.
+- Twenty-five failures from a non-loopback IP temporarily block that IP.
+- Loopback IPs are excluded from the global IP block for local emulator use.
 
 # Hệ thống phát hiện hành vi đăng nhập bất thường trên Web/Mobile
 

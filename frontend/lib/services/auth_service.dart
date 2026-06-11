@@ -106,8 +106,14 @@ class AuthService {
     return _requestAccountAction('/auth/request-unlock', email);
   }
 
-  Future<String> unlockAccount(String token) async {
-    final response = await _post('/auth/unlock-account', {'token': token});
+  Future<String> unlockAccount({
+    required String email,
+    required String otpCode,
+  }) async {
+    final response = await _post('/auth/unlock-account', {
+      'email': email,
+      'otp_code': otpCode,
+    });
     final data = _decode(response);
     if (response.statusCode >= 400) {
       throw ApiException(
@@ -119,11 +125,13 @@ class AuthService {
   }
 
   Future<String> resetPassword({
-    required String token,
+    required String email,
+    required String otpCode,
     required String newPassword,
   }) async {
     final response = await _post('/auth/reset-password', {
-      'token': token,
+      'email': email,
+      'otp_code': otpCode,
       'new_password': newPassword,
     });
     final data = _decode(response);

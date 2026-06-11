@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../services/auth_service.dart';
-import 'account_action_screen.dart';
+import 'login_screen.dart';
 
 enum RecoveryRequestType { resetPassword, unlockAccount }
 
@@ -25,10 +26,14 @@ class _AccountRecoveryRequestScreenState
   final _formKey = GlobalKey<FormState>();
   final _authService = AuthService();
   late final TextEditingController _emailController;
+  final _otpController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
 
   bool _loading = false;
+  bool _otpSent = false;
+  bool _completed = false;
   String? _message;
-  bool _success = false;
 
   bool get _isReset => widget.type == RecoveryRequestType.resetPassword;
 
@@ -38,12 +43,11 @@ class _AccountRecoveryRequestScreenState
     _emailController = TextEditingController(text: widget.initialEmail);
   }
 
-  Future<void> _submit() async {
+  Future<void> _sendOtp() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() {
       _loading = true;
       _message = null;
-      _success = false;
     });
 
     try {
@@ -53,8 +57,8 @@ class _AccountRecoveryRequestScreenState
           : await _authService.requestUnlock(email);
       if (mounted) {
         setState(() {
+          _otpSent = true;
           _message = message;
-          _success = true;
         });
       }
     } on ApiException catch (error) {
@@ -64,60 +68,50 @@ class _AccountRecoveryRequestScreenState
     }
   }
 
-  Future<void> _pasteLink() async {
-    final controller = TextEditingController();
-    final rawLink = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Dán liên kết từ email'),
-        content: TextField(
-          controller: controller,
-          minLines: 2,
-          maxLines: 4,
-          decoration: const InputDecoration(
-            hintText: 'bmud://account-action?action=...&token=...',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Hủy'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: const Text('Tiếp tục'),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (rawLink == null || rawLink.trim().isEmpty || !mounted) return;
+  Future<void> _verifyOtp() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _loading = true;
+      _message = null;
+    });
 
-    final uri = Uri.tryParse(rawLink.trim());
-    final action = uri?.queryParameters['action'];
-    final token = uri?.queryParameters['token'];
-    if (uri?.scheme != 'bmud' ||
-        uri?.host != 'account-action' ||
-        token == null ||
-        (action != 'unlock' && action != 'reset-password')) {
-      setState(() {
-        _success = false;
-        _message = 'Liên kết không hợp lệ';
-      });
-      return;
+    try {
+      final email = _emailController.text.trim();
+      final otpCode = _otpController.text.trim();
+      final message = _isReset
+          ? await _authService.resetPassword(
+              email: email,
+              otpCode: otpCode,
+              newPassword: _passwordController.text,
+            )
+          : await _authService.unlockAccount(email: email, otpCode: otpCode);
+      if (mounted) {
+        setState(() {
+          _completed = true;
+          _message = message;
+        });
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _message = error.message);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
+  }
 
-    await Navigator.push(
+  void _backToLogin() {
+    Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(
-        builder: (_) => AccountActionScreen(action: action!, token: token),
-      ),
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
     );
   }
 
   @override
   void dispose() {
     _emailController.dispose();
+    _otpController.dispose();
+    _passwordController.dispose();
+    _confirmController.dispose();
     super.dispose();
   }
 
@@ -134,51 +128,107 @@ class _AccountRecoveryRequestScreenState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  _isReset
-                      ? 'Nhập email để nhận liên kết đặt lại mật khẩu.'
-                      : 'Nhập email để nhận liên kết mở khóa tài khoản.',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 20),
-                TextFormField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  autofillHints: const [AutofillHints.email],
-                  decoration: const InputDecoration(labelText: 'Email'),
-                  validator: (value) {
-                    final email = value?.trim() ?? '';
-                    if (email.isEmpty) return 'Nhập email';
-                    if (!email.contains('@')) return 'Email không hợp lệ';
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-                FilledButton(
-                  onPressed: _loading ? null : _submit,
-                  child: _loading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Gửi liên kết qua email'),
-                ),
-                TextButton(
-                  onPressed: _loading ? null : _pasteLink,
-                  child: const Text('Dán liên kết đã nhận'),
-                ),
-                if (_message != null) ...[
+                if (_completed) ...[
+                  const Icon(Icons.check_circle, size: 64, color: Colors.green),
                   const SizedBox(height: 16),
                   Text(
-                    _message!,
+                    _message ?? 'Thao tác thành công',
                     textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: _success
-                          ? Colors.green
-                          : Theme.of(context).colorScheme.error,
-                    ),
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: _backToLogin,
+                    child: const Text('Quay lại đăng nhập'),
+                  ),
+                ] else ...[
+                  Text(
+                    _otpSent
+                        ? 'Nhập mã OTP 6 số đã gửi qua email.'
+                        : _isReset
+                        ? 'Nhập email để nhận OTP đặt lại mật khẩu.'
+                        : 'Nhập email để nhận OTP mở khóa tài khoản.',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 20),
+                  TextFormField(
+                    controller: _emailController,
+                    readOnly: _otpSent,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(labelText: 'Email'),
+                    validator: (value) {
+                      final email = value?.trim() ?? '';
+                      if (email.isEmpty) return 'Nhập email';
+                      if (!email.contains('@')) return 'Email không hợp lệ';
+                      return null;
+                    },
+                  ),
+                  if (_otpSent) ...[
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _otpController,
+                      autofocus: true,
+                      keyboardType: TextInputType.number,
+                      textAlign: TextAlign.center,
+                      maxLength: 6,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: const InputDecoration(labelText: 'Mã OTP'),
+                      validator: (value) => value?.length == 6
+                          ? null
+                          : 'OTP phải gồm đúng 6 chữ số',
+                    ),
+                    if (_isReset) ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _passwordController,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Mật khẩu mới',
+                        ),
+                        validator: (value) {
+                          if (value == null || value.length < 8) {
+                            return 'Mật khẩu phải có ít nhất 8 ký tự';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _confirmController,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Xác nhận mật khẩu mới',
+                        ),
+                        validator: (value) => value != _passwordController.text
+                            ? 'Mật khẩu không khớp'
+                            : null,
+                      ),
+                    ],
+                  ],
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: _loading
+                        ? null
+                        : _otpSent
+                        ? _verifyOtp
+                        : _sendOtp,
+                    child: _loading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Text(_otpSent ? 'Xác nhận OTP' : 'Gửi OTP'),
+                  ),
+                  if (_otpSent)
+                    TextButton(
+                      onPressed: _loading ? null : _sendOtp,
+                      child: const Text('Gửi lại OTP'),
+                    ),
+                  if (_message != null) ...[
+                    const SizedBox(height: 12),
+                    Text(_message!, textAlign: TextAlign.center),
+                  ],
                 ],
               ],
             ),

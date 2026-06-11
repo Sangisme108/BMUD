@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS account_action_tokens (
   action_type ENUM('UNLOCK_ACCOUNT', 'RESET_PASSWORD') NOT NULL,
   expires_at DATETIME NOT NULL,
   used_at DATETIME NULL,
+  attempts INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_account_action_tokens_user
     FOREIGN KEY (user_id) REFERENCES users(id)

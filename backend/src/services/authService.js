@@ -11,6 +11,18 @@ const {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const LOCK_MINUTES = 15;
+const ACCOUNT_FAILURE_LIMIT = Number.parseInt(
+  process.env.AUTH_ACCOUNT_FAILURE_LIMIT || '5',
+  10
+);
+const EMAIL_IP_FAILURE_LIMIT = Number.parseInt(
+  process.env.AUTH_EMAIL_IP_FAILURE_LIMIT || '5',
+  10
+);
+const IP_FAILURE_LIMIT = Number.parseInt(
+  process.env.AUTH_IP_FAILURE_LIMIT || '25',
+  10
+);
 
 const sanitizeUser = (user) => ({
   id: user.id,
@@ -27,6 +39,13 @@ const createHttpError = (message, statusCode) => {
 };
 
 const normalizeEmail = (email = '') => email.toLowerCase().trim();
+const normalizeIpAddress = (ipAddress = '') =>
+  ipAddress.startsWith('::ffff:') ? ipAddress.slice(7) : ipAddress;
+
+const isLoopbackIp = (ipAddress) => {
+  const normalizedIp = normalizeIpAddress(ipAddress);
+  return normalizedIp === '127.0.0.1' || normalizedIp === '::1';
+};
 
 const validateEmail = (email) => {
   if (!EMAIL_PATTERN.test(email)) {
@@ -35,7 +54,9 @@ const validateEmail = (email) => {
 };
 
 const getRequestContext = (req, deviceFingerprint) => ({
-  ipAddress: req.ip || req.socket.remoteAddress || 'unknown',
+  ipAddress: normalizeIpAddress(
+    req.ip || req.socket.remoteAddress || 'unknown'
+  ),
   userAgent: req.get('user-agent') || 'Unknown',
   deviceFingerprint,
 });
@@ -96,27 +117,30 @@ const recordLegacyHistory = async ({
 };
 
 const getRecentFailureCounts = async ({ email, ipAddress }) => {
+  const normalizedIp = normalizeIpAddress(ipAddress);
   const [[counts]] = await pool.query(
     `SELECT
        SUM(email = ?) AS email_count,
-       SUM(ip_address = ?) AS ip_count
+       SUM(ip_address = ?) AS ip_count,
+       SUM(email = ? AND ip_address = ?) AS email_ip_count
      FROM login_attempts
      WHERE failure_type = 'INVALID_CREDENTIALS'
        AND is_resolved = FALSE
        AND created_at >= (NOW() - INTERVAL 15 MINUTE)
        AND (email = ? OR ip_address = ?)`,
-    [email, ipAddress, email, ipAddress]
+    [email, normalizedIp, email, normalizedIp, email, normalizedIp]
   );
 
   return {
     emailCount: Number(counts.email_count || 0),
     ipCount: Number(counts.ip_count || 0),
+    emailIpCount: Number(counts.email_ip_count || 0),
   };
 };
 
 const lockUserIfThresholdReached = async ({ userId, email, ipAddress }) => {
   const counts = await getRecentFailureCounts({ email, ipAddress });
-  if (userId && counts.emailCount >= 5) {
+  if (userId && counts.emailCount >= ACCOUNT_FAILURE_LIMIT) {
     await pool.query(
       `UPDATE users
        SET is_locked = TRUE,
@@ -153,19 +177,30 @@ const assertLoginAllowed = async ({ email, ipAddress }) => {
     email: normalizedEmail,
     ipAddress,
   });
-  if (counts.emailCount >= 5) {
-    if (user) {
-      await lockUserIfThresholdReached({
-        userId: user.id,
-        email: normalizedEmail,
-        ipAddress,
-      });
-      throw createHttpError('Tài khoản đang bị khóa tạm thời trong 15 phút', 423);
-    }
-    throw createHttpError('Quá nhiều lần đăng nhập thất bại, vui lòng thử lại sau', 429);
+  if (user && counts.emailCount >= ACCOUNT_FAILURE_LIMIT) {
+    await lockUserIfThresholdReached({
+      userId: user.id,
+      email: normalizedEmail,
+      ipAddress,
+    });
+    throw createHttpError('Tài khoản đang bị khóa tạm thời trong 15 phút', 423);
   }
 
-  if (counts.ipCount >= 5) {
+  if (counts.emailIpCount >= EMAIL_IP_FAILURE_LIMIT) {
+    throw createHttpError(
+      'Email này có quá nhiều lần đăng nhập thất bại từ cùng một địa chỉ IP. Vui lòng thử lại sau.',
+      429
+    );
+  }
+
+  if (counts.emailCount >= ACCOUNT_FAILURE_LIMIT) {
+    throw createHttpError(
+      'Email này có quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau.',
+      429
+    );
+  }
+
+  if (!isLoopbackIp(ipAddress) && counts.ipCount >= IP_FAILURE_LIMIT) {
     throw createHttpError(
       'Địa chỉ IP này có quá nhiều lần đăng nhập thất bại, vui lòng thử lại sau',
       429

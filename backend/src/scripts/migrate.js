@@ -62,6 +62,27 @@ const run = async () => {
     } else {
       console.log('Account recovery migration is already applied.');
     }
+
+    const [[otpState]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE()
+         AND table_name = 'account_action_tokens'
+         AND column_name = 'attempts'`
+    );
+    if (Number(otpState.total) === 0) {
+      const otpPath = path.join(
+        __dirname,
+        '..',
+        '..',
+        'migrations',
+        '003_recovery_otp.sql'
+      );
+      await connection.query(fs.readFileSync(otpPath, 'utf8'));
+      console.log('Recovery OTP migration completed.');
+    } else {
+      console.log('Recovery OTP migration is already applied.');
+    }
   } finally {
     await connection.end();
   }

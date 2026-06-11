@@ -1,9 +1,5 @@
-import 'dart:async';
-
-import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 
-import 'screens/account_action_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
@@ -12,59 +8,12 @@ void main() {
   runApp(const SecurityLoginApp());
 }
 
-class SecurityLoginApp extends StatefulWidget {
+class SecurityLoginApp extends StatelessWidget {
   const SecurityLoginApp({super.key});
-
-  @override
-  State<SecurityLoginApp> createState() => _SecurityLoginAppState();
-}
-
-class _SecurityLoginAppState extends State<SecurityLoginApp> {
-  final _navigatorKey = GlobalKey<NavigatorState>();
-  final _appLinks = AppLinks();
-  StreamSubscription<Uri>? _linkSubscription;
-  String? _lastHandledLink;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeDeepLinks();
-  }
-
-  Future<void> _initializeDeepLinks() async {
-    final initialLink = await _appLinks.getInitialLink();
-    if (initialLink != null) _handleDeepLink(initialLink);
-    _linkSubscription = _appLinks.uriLinkStream.listen(_handleDeepLink);
-  }
-
-  void _handleDeepLink(Uri uri) {
-    if (uri.scheme != 'bmud' || uri.host != 'account-action') return;
-    final action = uri.queryParameters['action'];
-    final token = uri.queryParameters['token'];
-    if (action == null || token == null || token.isEmpty) return;
-    if (action != 'unlock' && action != 'reset-password') return;
-    if (_lastHandledLink == uri.toString()) return;
-    _lastHandledLink = uri.toString();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _navigatorKey.currentState?.push(
-        MaterialPageRoute(
-          builder: (_) => AccountActionScreen(action: action, token: token),
-        ),
-      );
-    });
-  }
-
-  @override
-  void dispose() {
-    _linkSubscription?.cancel();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Abnormal Login Detection',
       theme: ThemeData(

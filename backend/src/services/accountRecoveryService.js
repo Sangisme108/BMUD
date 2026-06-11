@@ -2,14 +2,14 @@ const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const pool = require('../config/db');
 const {
-  sendPasswordResetEmail,
-  sendUnlockAccountEmail,
+  sendPasswordResetOtpEmail,
+  sendUnlockAccountOtpEmail,
 } = require('./emailService');
 
-const RESET_TTL_MS = 30 * 60 * 1000;
-const UNLOCK_TTL_MS = 15 * 60 * 1000;
+const OTP_TTL_MS = 5 * 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
 const GENERIC_MESSAGE =
-  'Nếu email tồn tại trong hệ thống, hướng dẫn sẽ được gửi trong ít phút.';
+  'Nếu email tồn tại trong hệ thống, mã OTP sẽ được gửi trong ít phút.';
 
 const createHttpError = (message, statusCode) => {
   const error = new Error(message);
@@ -18,11 +18,14 @@ const createHttpError = (message, statusCode) => {
 };
 
 const normalizeEmail = (email = '') => email.toLowerCase().trim();
-const hashToken = (token) =>
-  crypto.createHash('sha256').update(token).digest('hex');
+const hashOtp = (otp) =>
+  crypto
+    .createHash('sha256')
+    .update(`${otp}:${process.env.OTP_SECRET || process.env.JWT_SECRET}`)
+    .digest('hex');
 
-const createActionToken = async ({ userId, actionType, ttlMs }) => {
-  const rawToken = crypto.randomBytes(32).toString('hex');
+const createRecoveryOtp = async ({ userId, actionType }) => {
+  const otpCode = crypto.randomInt(100000, 1000000).toString();
   await pool.query(
     `UPDATE account_action_tokens
      SET used_at = NOW()
@@ -31,17 +34,16 @@ const createActionToken = async ({ userId, actionType, ttlMs }) => {
   );
   await pool.query(
     `INSERT INTO account_action_tokens
-     (user_id, token_hash, action_type, expires_at)
-     VALUES (?, ?, ?, ?)`,
-    [userId, hashToken(rawToken), actionType, new Date(Date.now() + ttlMs)]
+     (user_id, token_hash, action_type, expires_at, attempts)
+     VALUES (?, ?, ?, ?, 0)`,
+    [
+      userId,
+      hashOtp(otpCode),
+      actionType,
+      new Date(Date.now() + OTP_TTL_MS),
+    ]
   );
-  return rawToken;
-};
-
-const buildActionLink = ({ action, token }) => {
-  const baseUrl = process.env.APP_DEEP_LINK_BASE || 'bmud://account-action';
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  return `${baseUrl}${separator}action=${encodeURIComponent(action)}&token=${encodeURIComponent(token)}`;
+  return otpCode;
 };
 
 const requestPasswordReset = async ({ email }) => {
@@ -52,15 +54,14 @@ const requestPasswordReset = async ({ email }) => {
   );
   if (!user) return { message: GENERIC_MESSAGE };
 
-  const token = await createActionToken({
+  const otpCode = await createRecoveryOtp({
     userId: user.id,
     actionType: 'RESET_PASSWORD',
-    ttlMs: RESET_TTL_MS,
   });
-  await sendPasswordResetEmail({
+  await sendPasswordResetOtpEmail({
     user,
-    actionLink: buildActionLink({ action: 'reset-password', token }),
-    expiresInMinutes: 30,
+    otpCode,
+    expiresInMinutes: 5,
   });
   return { message: GENERIC_MESSAGE };
 };
@@ -68,60 +69,87 @@ const requestPasswordReset = async ({ email }) => {
 const requestUnlock = async ({ email }) => {
   const normalizedEmail = normalizeEmail(email);
   const [[user]] = await pool.query(
-    'SELECT id, full_name, email, is_locked FROM users WHERE email = ?',
+    'SELECT id, full_name, email FROM users WHERE email = ?',
     [normalizedEmail]
   );
   if (!user) return { message: GENERIC_MESSAGE };
 
-  const token = await createActionToken({
+  const otpCode = await createRecoveryOtp({
     userId: user.id,
     actionType: 'UNLOCK_ACCOUNT',
-    ttlMs: UNLOCK_TTL_MS,
   });
-  await sendUnlockAccountEmail({
+  await sendUnlockAccountOtpEmail({
     user,
-    actionLink: buildActionLink({ action: 'unlock', token }),
-    expiresInMinutes: 15,
+    otpCode,
+    expiresInMinutes: 5,
   });
   return { message: GENERIC_MESSAGE };
 };
 
-const consumeActionToken = async ({ token, actionType, handler }) => {
+const verifyRecoveryOtp = async ({
+  email,
+  otpCode,
+  actionType,
+  handler,
+}) => {
+  const normalizedEmail = normalizeEmail(email);
   const connection = await pool.getConnection();
+  let transactionOpen = false;
+
   try {
     await connection.beginTransaction();
+    transactionOpen = true;
     const [[record]] = await connection.query(
-      `SELECT id, user_id
-       FROM account_action_tokens
-       WHERE token_hash = ?
-         AND action_type = ?
-         AND used_at IS NULL
-         AND expires_at > NOW()
+      `SELECT token.id, token.user_id, token.token_hash, token.attempts
+       FROM account_action_tokens AS token
+       JOIN users ON users.id = token.user_id
+       WHERE users.email = ?
+         AND token.action_type = ?
+         AND token.used_at IS NULL
+         AND token.expires_at > NOW()
+       ORDER BY token.created_at DESC
        LIMIT 1
        FOR UPDATE`,
-      [hashToken(token), actionType]
+      [normalizedEmail, actionType]
     );
+
     if (!record) {
-      throw createHttpError('Liên kết không hợp lệ hoặc đã hết hạn', 400);
+      throw createHttpError('Mã OTP không hợp lệ hoặc đã hết hạn', 400);
+    }
+    if (record.attempts >= MAX_OTP_ATTEMPTS) {
+      throw createHttpError('Bạn đã nhập sai OTP quá số lần cho phép', 423);
+    }
+    if (record.token_hash !== hashOtp(otpCode)) {
+      await connection.query(
+        'UPDATE account_action_tokens SET attempts = attempts + 1 WHERE id = ?',
+        [record.id]
+      );
+      await connection.commit();
+      transactionOpen = false;
+      throw createHttpError('Mã OTP không chính xác', 400);
     }
 
     await handler(connection, record.user_id);
     await connection.query(
-      'UPDATE account_action_tokens SET used_at = NOW() WHERE id = ?',
-      [record.id]
+      `UPDATE account_action_tokens
+       SET used_at = NOW()
+       WHERE user_id = ? AND action_type = ? AND used_at IS NULL`,
+      [record.user_id, actionType]
     );
     await connection.commit();
+    transactionOpen = false;
   } catch (error) {
-    await connection.rollback();
+    if (transactionOpen) await connection.rollback();
     throw error;
   } finally {
     connection.release();
   }
 };
 
-const unlockAccount = async ({ token }) => {
-  await consumeActionToken({
-    token,
+const unlockAccount = async ({ email, otpCode }) => {
+  await verifyRecoveryOtp({
+    email,
+    otpCode,
     actionType: 'UNLOCK_ACCOUNT',
     handler: async (connection, userId) => {
       await connection.query(
@@ -139,14 +167,15 @@ const unlockAccount = async ({ token }) => {
   return { message: 'Tài khoản đã được mở khóa. Bạn có thể đăng nhập lại.' };
 };
 
-const resetPassword = async ({ token, newPassword }) => {
+const resetPassword = async ({ email, otpCode, newPassword }) => {
   if (!newPassword || newPassword.length < 8) {
     throw createHttpError('Mật khẩu mới phải có ít nhất 8 ký tự', 400);
   }
   const passwordHash = await bcrypt.hash(newPassword, 12);
 
-  await consumeActionToken({
-    token,
+  await verifyRecoveryOtp({
+    email,
+    otpCode,
     actionType: 'RESET_PASSWORD',
     handler: async (connection, userId) => {
       await connection.query(
@@ -164,12 +193,6 @@ const resetPassword = async ({ token, newPassword }) => {
       await connection.query(
         `UPDATE refresh_tokens
          SET revoked_at = COALESCE(revoked_at, NOW())
-         WHERE user_id = ?`,
-        [userId]
-      );
-      await connection.query(
-        `UPDATE account_action_tokens
-         SET used_at = COALESCE(used_at, NOW())
          WHERE user_id = ?`,
         [userId]
       );

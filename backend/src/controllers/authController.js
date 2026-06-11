@@ -101,12 +101,18 @@ const requestPasswordReset = async (req, res, next) => {
 
 const resetPassword = async (req, res, next) => {
   try {
-    const { token, new_password } = req.body;
-    if (!token || !new_password) {
-      return res.status(400).json({ message: 'Thiếu token hoặc mật khẩu mới' });
+    const { email, otp_code, new_password } = req.body;
+    if (!email || !otp_code || !new_password) {
+      return res.status(400).json({
+        message: 'Thiếu email, OTP hoặc mật khẩu mới',
+      });
+    }
+    if (!/^\d{6}$/.test(otp_code)) {
+      return res.status(400).json({ message: 'OTP phải gồm 6 chữ số' });
     }
     const result = await accountRecoveryService.resetPassword({
-      token,
+      email,
+      otpCode: otp_code,
       newPassword: new_password,
     });
     return res.json(result);
@@ -131,11 +137,16 @@ const requestUnlock = async (req, res, next) => {
 
 const unlockAccount = async (req, res, next) => {
   try {
-    if (!req.body.token) {
-      return res.status(400).json({ message: 'Thiếu token mở khóa' });
+    const { email, otp_code } = req.body;
+    if (!email || !otp_code) {
+      return res.status(400).json({ message: 'Thiếu email hoặc OTP mở khóa' });
+    }
+    if (!/^\d{6}$/.test(otp_code)) {
+      return res.status(400).json({ message: 'OTP phải gồm 6 chữ số' });
     }
     const result = await accountRecoveryService.unlockAccount({
-      token: req.body.token,
+      email,
+      otpCode: otp_code,
     });
     return res.json(result);
   } catch (error) {

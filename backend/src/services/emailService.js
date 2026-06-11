@@ -73,13 +73,11 @@ const sendOtpEmail = async ({
   return true;
 };
 
-const sendAccountActionEmail = async ({
+const sendRecoveryOtpEmail = async ({
   user,
   subject,
-  heading,
   description,
-  buttonLabel,
-  actionLink,
+  otpCode,
   expiresInMinutes,
 }) => {
   const transporter = createTransporter();
@@ -96,42 +94,33 @@ const sendAccountActionEmail = async ({
     html: `
       <p>Xin chào ${escapeHtml(user.full_name)},</p>
       <p>${escapeHtml(description)}</p>
-      <p>
-        <a href="${escapeHtml(actionLink)}"
-           style="display:inline-block;padding:12px 18px;background:#0f766e;color:white;text-decoration:none;border-radius:6px">
-          ${escapeHtml(buttonLabel)}
-        </a>
+      <p style="font-size: 28px; font-weight: bold; letter-spacing: 6px">
+        ${escapeHtml(otpCode)}
       </p>
-      <p>Liên kết có hiệu lực trong ${escapeHtml(expiresInMinutes)} phút và chỉ dùng được một lần.</p>
-      <p>Nếu nút không mở ứng dụng, hãy sao chép liên kết này:</p>
-      <p style="word-break:break-all">${escapeHtml(actionLink)}</p>
+      <p>Mã có hiệu lực trong ${escapeHtml(expiresInMinutes)} phút và chỉ dùng được một lần.</p>
       <p>Nếu bạn không yêu cầu thao tác này, hãy bỏ qua email.</p>
     `,
-    text: `${heading}\n\n${description}\n\n${actionLink}\n\nLiên kết có hiệu lực trong ${expiresInMinutes} phút và chỉ dùng được một lần.`,
+    text: `${description}\n\nMã OTP: ${otpCode}\n\nMã có hiệu lực trong ${expiresInMinutes} phút và chỉ dùng được một lần.`,
   });
 };
 
-const sendPasswordResetEmail = (params) =>
-  sendAccountActionEmail({
+const sendPasswordResetOtpEmail = (params) =>
+  sendRecoveryOtpEmail({
     ...params,
-    subject: 'BMUD - Đặt lại mật khẩu',
-    heading: 'Đặt lại mật khẩu',
-    description: 'Bạn vừa yêu cầu đặt lại mật khẩu cho tài khoản BMUD.',
-    buttonLabel: 'Đặt lại mật khẩu',
+    subject: 'BMUD - Mã OTP đặt lại mật khẩu',
+    description: 'Dùng mã OTP sau để đặt lại mật khẩu tài khoản BMUD.',
   });
 
-const sendUnlockAccountEmail = (params) =>
-  sendAccountActionEmail({
+const sendUnlockAccountOtpEmail = (params) =>
+  sendRecoveryOtpEmail({
     ...params,
-    subject: 'BMUD - Mở khóa tài khoản',
-    heading: 'Mở khóa tài khoản',
-    description: 'Bạn vừa yêu cầu mở khóa tài khoản BMUD.',
-    buttonLabel: 'Mở khóa tài khoản',
+    subject: 'BMUD - Mã OTP mở khóa tài khoản',
+    description: 'Dùng mã OTP sau để mở khóa tài khoản BMUD.',
   });
 
 module.exports = {
   sendLoginAlertEmail,
   sendOtpEmail,
-  sendPasswordResetEmail,
-  sendUnlockAccountEmail,
+  sendPasswordResetOtpEmail,
+  sendUnlockAccountOtpEmail,
 };
