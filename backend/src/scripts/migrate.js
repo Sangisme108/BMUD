@@ -81,6 +81,26 @@ const run = async () => {
     } else {
       console.log('Recovery OTP migration is already applied.');
     }
+
+    const [[messagingState]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM information_schema.tables
+       WHERE table_schema = DATABASE()
+         AND table_name IN ('friendships', 'messages')`
+    );
+    if (Number(messagingState.total) < 2) {
+      const messagingPath = path.join(
+        __dirname,
+        '..',
+        '..',
+        'migrations',
+        '004_friendships_messages.sql'
+      );
+      await connection.query(fs.readFileSync(messagingPath, 'utf8'));
+      console.log('Friendship and messaging migration completed.');
+    } else {
+      console.log('Friendship and messaging migration is already applied.');
+    }
   } finally {
     await connection.end();
   }

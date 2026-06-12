@@ -18,6 +18,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _authService = AuthService();
 
   bool _loading = false;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
   String? _message;
 
   Future<void> _register() async {
@@ -86,8 +88,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Password'),
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
+                    labelText: 'Mật khẩu',
+                    suffixIcon: IconButton(
+                      onPressed: () {
+                        setState(() => _obscurePassword = !_obscurePassword);
+                      },
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      tooltip: _obscurePassword
+                          ? 'Hiện mật khẩu'
+                          : 'Ẩn mật khẩu',
+                    ),
+                  ),
                   validator: (value) {
                     if (value == null || value.isEmpty) return 'Nhập mật khẩu';
                     if (value.length < 8) return 'Mật khẩu ít nhất 8 ký tự';
@@ -97,9 +114,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _confirmController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Confirm password',
+                  obscureText: _obscureConfirmPassword,
+                  decoration: InputDecoration(
+                    labelText: 'Xác nhận mật khẩu',
+                    suffixIcon: IconButton(
+                      onPressed: () {
+                        setState(
+                          () => _obscureConfirmPassword =
+                              !_obscureConfirmPassword,
+                        );
+                      },
+                      icon: Icon(
+                        _obscureConfirmPassword
+                            ? Icons.visibility_off
+                            : Icons.visibility,
+                      ),
+                      tooltip: _obscureConfirmPassword
+                          ? 'Hiện mật khẩu'
+                          : 'Ẩn mật khẩu',
+                    ),
                   ),
                   validator: (value) => value != _passwordController.text
                       ? 'Mật khẩu không khớp'

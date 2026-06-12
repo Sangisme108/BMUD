@@ -22,6 +22,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _deviceService = DeviceService();
 
   bool _loading = false;
+  bool _obscurePassword = true;
   String? _message;
 
   Future<void> _login() async {
@@ -118,9 +119,24 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: _passwordController,
-                    obscureText: true,
+                    obscureText: _obscurePassword,
                     autofillHints: const [AutofillHints.password],
-                    decoration: const InputDecoration(labelText: 'Mật khẩu'),
+                    decoration: InputDecoration(
+                      labelText: 'Mật khẩu',
+                      suffixIcon: IconButton(
+                        onPressed: () {
+                          setState(() => _obscurePassword = !_obscurePassword);
+                        },
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                        tooltip: _obscurePassword
+                            ? 'Hiện mật khẩu'
+                            : 'Ẩn mật khẩu',
+                      ),
+                    ),
                     validator: (value) =>
                         value == null || value.isEmpty ? 'Nhập mật khẩu' : null,
                     onFieldSubmitted: (_) {

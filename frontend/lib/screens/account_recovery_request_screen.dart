@@ -33,6 +33,8 @@ class _AccountRecoveryRequestScreenState
   bool _loading = false;
   bool _otpSent = false;
   bool _completed = false;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
   String? _message;
 
   bool get _isReset => widget.type == RecoveryRequestType.resetPassword;
@@ -181,9 +183,24 @@ class _AccountRecoveryRequestScreenState
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _passwordController,
-                        obscureText: true,
-                        decoration: const InputDecoration(
+                        obscureText: _obscurePassword,
+                        decoration: InputDecoration(
                           labelText: 'Mật khẩu mới',
+                          suffixIcon: IconButton(
+                            onPressed: () {
+                              setState(
+                                () => _obscurePassword = !_obscurePassword,
+                              );
+                            },
+                            icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                            ),
+                            tooltip: _obscurePassword
+                                ? 'Hiện mật khẩu'
+                                : 'Ẩn mật khẩu',
+                          ),
                         ),
                         validator: (value) {
                           if (value == null || value.length < 8) {
@@ -195,9 +212,25 @@ class _AccountRecoveryRequestScreenState
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _confirmController,
-                        obscureText: true,
-                        decoration: const InputDecoration(
+                        obscureText: _obscureConfirmPassword,
+                        decoration: InputDecoration(
                           labelText: 'Xác nhận mật khẩu mới',
+                          suffixIcon: IconButton(
+                            onPressed: () {
+                              setState(
+                                () => _obscureConfirmPassword =
+                                    !_obscureConfirmPassword,
+                              );
+                            },
+                            icon: Icon(
+                              _obscureConfirmPassword
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                            ),
+                            tooltip: _obscureConfirmPassword
+                                ? 'Hiện mật khẩu'
+                                : 'Ẩn mật khẩu',
+                          ),
                         ),
                         validator: (value) => value != _passwordController.text
                             ? 'Mật khẩu không khớp'

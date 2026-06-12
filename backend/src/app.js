@@ -5,6 +5,7 @@ require('dotenv').config();
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const securityRoutes = require('./routes/securityRoutes');
+const socialRoutes = require('./routes/socialRoutes');
 
 const app = express();
 
@@ -21,6 +22,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/security', securityRoutes);
+app.use('/api/social', socialRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: 'Không tìm thấy endpoint' });

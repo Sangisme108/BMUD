@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/user.dart';
 import '../services/auth_service.dart';
+import 'friends_screen.dart';
 import 'login_history_screen.dart';
 import 'login_screen.dart';
 import 'security_dashboard_screen.dart';
@@ -87,6 +88,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
                 icon: const Icon(Icons.security),
                 label: const Text('Xem dashboard bảo mật'),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const FriendsScreen()),
+                  );
+                },
+                icon: const Icon(Icons.forum),
+                label: const Text('Bạn bè và tin nhắn'),
               ),
               const Spacer(),
               OutlinedButton.icon(
