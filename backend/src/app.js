@@ -6,13 +6,35 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const securityRoutes = require('./routes/securityRoutes');
 const socialRoutes = require('./routes/socialRoutes');
+const {
+  requireHttpsInProduction,
+  secureHeaders,
+} = require('./middleware/securityMiddleware');
 
 const app = express();
 
 const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || '1', 10);
 app.set('trust proxy', Number.isNaN(trustProxyHops) ? 1 : trustProxyHops);
+app.disable('x-powered-by');
 
-app.use(cors({ origin: '*', credentials: false }));
+const allowedOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(secureHeaders);
+app.use(requireHttpsInProduction);
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error('CORS origin is not allowed'));
+    },
+    credentials: false,
+  })
+);
 app.use(express.json());
 
 app.get('/health', (req, res) => {
