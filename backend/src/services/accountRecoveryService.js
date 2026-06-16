@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const pool = require('../config/db');
 const { resetVerifiedDevices } = require('./messageRecoveryService');
+const { recordSecurityEvent } = require('./securityEventService');
 const {
   sendPasswordResetOtpEmail,
   sendUnlockAccountOtpEmail,
@@ -163,6 +164,13 @@ const unlockAccount = async ({ email, otpCode }) => {
          WHERE user_id = ? AND failure_type = 'INVALID_CREDENTIALS'`,
         [userId]
       );
+      await recordSecurityEvent({
+        userId,
+        eventType: 'ACCOUNT_UNLOCKED',
+        title: 'Mo khoa tai khoan',
+        description: 'Tai khoan da duoc mo khoa bang OTP.',
+        riskLevel: 'MEDIUM',
+      });
     },
   });
   return { message: 'Tài khoản đã được mở khóa. Bạn có thể đăng nhập lại.' };
@@ -198,6 +206,13 @@ const resetPassword = async ({ email, otpCode, newPassword }) => {
         [userId]
       );
       await resetVerifiedDevices(userId);
+      await recordSecurityEvent({
+        userId,
+        eventType: 'PASSWORD_RESET',
+        title: 'Doi mat khau thanh cong',
+        description: 'Mat khau da duoc dat lai, cac thiet bi can xac minh lai tin nhan.',
+        riskLevel: 'HIGH',
+      });
     },
   });
   return { message: 'Mật khẩu đã được thay đổi. Hãy đăng nhập lại.' };

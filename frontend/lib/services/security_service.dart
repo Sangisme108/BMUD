@@ -39,6 +39,46 @@ class SecurityService {
     return data;
   }
 
+  Future<List<Map<String, dynamic>>> getDevices() async {
+    final response = await _authorizedGet('/security/devices');
+    final data = _decode(response);
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        data['message']?.toString() ?? 'Không tải được thiết bị',
+        statusCode: response.statusCode,
+      );
+    }
+    return (data['data'] as List<dynamic>? ?? [])
+        .map((item) => item as Map<String, dynamic>)
+        .toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getSecurityEvents() async {
+    final response = await _authorizedGet('/security/events');
+    final data = _decode(response);
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        data['message']?.toString() ?? 'Không tải được nhật ký bảo mật',
+        statusCode: response.statusCode,
+      );
+    }
+    return (data['data'] as List<dynamic>? ?? [])
+        .map((item) => item as Map<String, dynamic>)
+        .toList();
+  }
+
+  Future<String> revokeDevice(int id) async {
+    final response = await _authorizedDelete('/security/devices/$id');
+    final data = _decode(response);
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        data['message']?.toString() ?? 'Không thể gỡ thiết bị',
+        statusCode: response.statusCode,
+      );
+    }
+    return data['message']?.toString() ?? 'Đã gỡ thiết bị tin cậy';
+  }
+
   Future<http.Response> _authorizedGet(String path) async {
     try {
       var response = await http
@@ -51,6 +91,33 @@ class SecurityService {
       if (response.statusCode == 401 && await _authService.refreshSession()) {
         response = await http
             .get(
+              Uri.parse('${ApiConfig.baseUrl}$path'),
+              headers: await _headers(),
+            )
+            .timeout(_requestTimeout);
+      }
+      return response;
+    } on TimeoutException {
+      throw const ApiException('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
+    } on ApiException {
+      rethrow;
+    } on Exception catch (error) {
+      throw ApiException('Không thể kết nối máy chủ: $error');
+    }
+  }
+
+  Future<http.Response> _authorizedDelete(String path) async {
+    try {
+      var response = await http
+          .delete(
+            Uri.parse('${ApiConfig.baseUrl}$path'),
+            headers: await _headers(),
+          )
+          .timeout(_requestTimeout);
+
+      if (response.statusCode == 401 && await _authService.refreshSession()) {
+        response = await http
+            .delete(
               Uri.parse('${ApiConfig.baseUrl}$path'),
               headers: await _headers(),
             )

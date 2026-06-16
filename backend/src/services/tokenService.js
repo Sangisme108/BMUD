@@ -104,13 +104,21 @@ const rotateRefreshToken = async (refreshToken) => {
 };
 
 const revokeRefreshToken = async (refreshToken) => {
-  if (!refreshToken) return;
+  if (!refreshToken) return null;
+  const [[storedToken]] = await pool.query(
+    `SELECT user_id
+     FROM refresh_tokens
+     WHERE token_hash = ?
+     LIMIT 1`,
+    [hashToken(refreshToken)]
+  );
   await pool.query(
     `UPDATE refresh_tokens
      SET revoked_at = COALESCE(revoked_at, NOW())
      WHERE token_hash = ?`,
     [hashToken(refreshToken)]
   );
+  return storedToken?.user_id || null;
 };
 
 module.exports = {

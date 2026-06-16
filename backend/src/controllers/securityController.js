@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const deviceManagementService = require('../services/deviceManagementService');
 
 const getLoginHistory = async (req, res, next) => {
   try {
@@ -48,6 +49,16 @@ const getDashboard = async (req, res, next) => {
       [req.user.id]
     );
 
+    const [events] = await pool.query(
+      `SELECT id, event_type, title, description, ip_address, user_agent,
+              risk_level, created_at
+       FROM security_events
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 10`,
+      [req.user.id]
+    );
+
     res.json({
       total_logins: Number(summary.total_logins || 0),
       low_count: Number(summary.low_count || 0),
@@ -55,13 +66,56 @@ const getDashboard = async (req, res, next) => {
       high_count: Number(summary.high_count || 0),
       last_login: lastLogin || null,
       alerts,
+      events,
     });
   } catch (error) {
     next(error);
   }
 };
 
+const getSecurityEvents = async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, event_type, title, description, ip_address, user_agent,
+              risk_level, metadata, created_at
+       FROM security_events
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT 100`,
+      [req.user.id]
+    );
+    res.json({ data: rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getDevices = async (req, res, next) => {
+  try {
+    const devices = await deviceManagementService.listDevices(req.user.id);
+    res.json({ data: devices });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const revokeDevice = async (req, res, next) => {
+  try {
+    const result = await deviceManagementService.revokeDevice({
+      userId: req.user.id,
+      deviceId: Number(req.params.id),
+      req,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
-  getLoginHistory,
   getDashboard,
+  getDevices,
+  getLoginHistory,
+  getSecurityEvents,
+  revokeDevice,
 };

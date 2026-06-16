@@ -4,6 +4,7 @@ import '../models/social_models.dart';
 import '../models/user.dart';
 import '../services/auth_service.dart';
 import '../services/message_recovery_service.dart';
+import '../services/security_service.dart';
 import '../services/social_service.dart';
 import '../widgets/messenger_avatar.dart';
 import 'account_recovery_request_screen.dart';
@@ -758,7 +759,7 @@ class ProfileTab extends StatelessWidget {
       _ProfileAction(Icons.devices, 'Thiết bị đã đăng nhập', () {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const DevicesScreen()),
+          MaterialPageRoute(builder: (_) => const RealDevicesScreen()),
         );
       }),
       _ProfileAction(Icons.verified_user, 'Xác minh 2 lớp (2FA)', () {}),
@@ -875,6 +876,113 @@ class ProfileTab extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class RealDevicesScreen extends StatefulWidget {
+  const RealDevicesScreen({super.key});
+
+  @override
+  State<RealDevicesScreen> createState() => _RealDevicesScreenState();
+}
+
+class _RealDevicesScreenState extends State<RealDevicesScreen> {
+  final _securityService = SecurityService();
+  late Future<List<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _securityService.getDevices();
+  }
+
+  Future<void> _reload() async {
+    setState(() => _future = _securityService.getDevices());
+    await _future;
+  }
+
+  Future<void> _revokeDevice(int id) async {
+    try {
+      final message = await _securityService.revokeDevice(id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+      await _reload();
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Thiết bị đã đăng nhập')),
+      body: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text(snapshot.error.toString()));
+          }
+
+          final devices = snapshot.data ?? [];
+          if (devices.isEmpty) {
+            return const Center(child: Text('Chưa có thiết bị đăng nhập'));
+          }
+
+          return RefreshIndicator(
+            onRefresh: _reload,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: devices.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final device = devices[index];
+                final os = device['os_name']?.toString() ?? 'Không xác định';
+                final trusted =
+                    device['is_trusted'] == 1 || device['is_trusted'] == true;
+                final recovered = device['message_recovery_verified'] == 1 ||
+                    device['message_recovery_verified'] == true;
+                return Card(
+                  elevation: 0,
+                  child: ListTile(
+                    leading: CircleAvatar(child: Icon(_deviceIcon(os))),
+                    title: Text(device['device_name']?.toString() ?? os),
+                    subtitle: Text(
+                      'Hệ điều hành: $os\n'
+                      'IP: ${device['ip_address'] ?? 'Không rõ'}\n'
+                      'Hoạt động cuối: ${device['last_used_at'] ?? ''}\n'
+                      'Tin cậy: ${trusted ? 'Có' : 'Không'} | '
+                      'Tin nhắn: ${recovered ? 'Đã khôi phục' : 'Chưa khôi phục'}',
+                    ),
+                    trailing: TextButton(
+                      onPressed: trusted
+                          ? () => _revokeDevice(device['id'] as int)
+                          : null,
+                      child: const Text('Gỡ'),
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  IconData _deviceIcon(String os) {
+    final raw = os.toLowerCase();
+    if (raw.contains('android')) return Icons.android;
+    if (raw.contains('ios') || raw.contains('iphone')) return Icons.phone_iphone;
+    if (raw.contains('windows') || raw.contains('mac')) return Icons.computer;
+    return Icons.language;
   }
 }
 

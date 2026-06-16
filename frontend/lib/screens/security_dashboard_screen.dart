@@ -37,6 +37,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
 
           final data = snapshot.data ?? {};
           final alerts = (data['alerts'] as List<dynamic>? ?? []);
+          final events = (data['events'] as List<dynamic>? ?? []);
 
           return ListView(
             padding: const EdgeInsets.all(16),
@@ -89,11 +90,54 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                     ),
                   );
                 }),
+              const SizedBox(height: 20),
+              Text(
+                'Nhật ký bảo mật gần đây',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              if (events.isEmpty)
+                const Text('Chưa có sự kiện bảo mật')
+              else
+                ...events.map((raw) {
+                  final event = raw as Map<String, dynamic>;
+                  return Card(
+                    elevation: 0,
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        child: Icon(_eventIcon(event['event_type']?.toString())),
+                      ),
+                      title: Text(event['title']?.toString() ?? 'Sự kiện'),
+                      subtitle: Text(
+                        '${event['description'] ?? ''}\n'
+                        'IP: ${event['ip_address'] ?? 'Không rõ'}\n'
+                        'Thời gian: ${event['created_at'] ?? ''}',
+                      ),
+                      trailing: RiskBadge(
+                        riskLevel: event['risk_level']?.toString() ?? 'LOW',
+                      ),
+                    ),
+                  );
+                }),
             ],
           );
         },
       ),
     );
+  }
+
+  IconData _eventIcon(String? type) {
+    final raw = (type ?? '').toLowerCase();
+    if (raw.contains('login_failed') || raw.contains('blocked')) {
+      return Icons.warning_amber;
+    }
+    if (raw.contains('otp')) return Icons.password;
+    if (raw.contains('device')) return Icons.devices_other;
+    if (raw.contains('recovery')) return Icons.lock_reset;
+    if (raw.contains('password')) return Icons.key;
+    return Icons.security;
   }
 }
 

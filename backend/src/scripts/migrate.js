@@ -208,6 +208,26 @@ const run = async () => {
     } else {
       console.log('Message recovery migration is already applied.');
     }
+
+    const [[securityEventsState]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM information_schema.tables
+       WHERE table_schema = DATABASE()
+         AND table_name = 'security_events'`
+    );
+    if (Number(securityEventsState.total) === 0) {
+      const securityEventsPath = path.join(
+        __dirname,
+        '..',
+        '..',
+        'migrations',
+        '006_security_events.sql'
+      );
+      await connection.query(fs.readFileSync(securityEventsPath, 'utf8'));
+      console.log('Security events migration completed.');
+    } else {
+      console.log('Security events migration is already applied.');
+    }
   } finally {
     await connection.end();
   }

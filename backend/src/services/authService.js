@@ -4,6 +4,7 @@ const pool = require('../config/db');
 const { detectLoginRisk } = require('./anomalyDetectionService');
 const { sendLoginAlertEmail, sendOtpEmail } = require('./emailService');
 const { createOtpChallenge, verifyOtpChallenge } = require('./otpService');
+const { recordSecurityEvent } = require('./securityEventService');
 const {
   createTokenPair,
   revokeRefreshToken,
@@ -287,6 +288,17 @@ const completeLogin = async ({
     'UPDATE users SET is_locked = FALSE, lock_until = NULL WHERE id = ?',
     [user.id]
   );
+  await recordSecurityEvent({
+    userId: user.id,
+    eventType: 'LOGIN_SUCCESS',
+    title: 'Dang nhap thanh cong',
+    description: reason,
+    ipAddress,
+    userAgent,
+    deviceFingerprint,
+    riskLevel,
+    metadata: { risk_score: riskScore },
+  });
 
   return {
     ...(await createTokenPair(user)),
@@ -320,6 +332,13 @@ const register = async ({ full_name, email, password }) => {
      FROM users WHERE id = ?`,
     [result.insertId]
   );
+  await recordSecurityEvent({
+    userId: user.id,
+    eventType: 'REGISTER',
+    title: 'Tạo tài khoản mới',
+    description: 'Tài khoản đã được đăng ký thành công.',
+    riskLevel: 'LOW',
+  });
   return sanitizeUser(user);
 };
 
@@ -351,6 +370,17 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       email: normalizedEmail,
       ipAddress: context.ipAddress,
     });
+    await recordSecurityEvent({
+      userId: user?.id || null,
+      eventType: 'LOGIN_FAILED',
+      title: 'Dang nhap that bai',
+      description: 'Sai email hoac mat khau.',
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      deviceFingerprint,
+      riskLevel: 'MEDIUM',
+      metadata: { email: normalizedEmail },
+    });
     throw createHttpError('Email hoặc mật khẩu không chính xác', 401);
   }
 
@@ -377,6 +407,17 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       isSuccessful: false,
       riskLevel: risk.riskLevel,
       reason: risk.reason,
+    });
+    await recordSecurityEvent({
+      userId: user.id,
+      eventType: 'LOGIN_BLOCKED_HIGH_RISK',
+      title: 'Dang nhap bi chan do rui ro cao',
+      description: risk.reason,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      deviceFingerprint,
+      riskLevel: 'HIGH',
+      metadata: { risk_score: risk.riskScore },
     });
     sendLoginAlertEmail({
       user: sanitizeUser(user),
@@ -407,6 +448,17 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       riskScore: risk.riskScore,
       riskLevel: risk.riskLevel,
       reason: risk.reason,
+    });
+    await recordSecurityEvent({
+      userId: user.id,
+      eventType: 'OTP_REQUIRED',
+      title: 'Yeu cau OTP cho thiet bi moi',
+      description: risk.reason,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      deviceFingerprint,
+      riskLevel: risk.riskLevel,
+      metadata: { risk_score: risk.riskScore },
     });
     let emailSent = false;
     try {
@@ -486,7 +538,14 @@ const refresh = async ({ refreshToken }) => {
 };
 
 const logout = async ({ refreshToken }) => {
-  await revokeRefreshToken(refreshToken);
+  const userId = await revokeRefreshToken(refreshToken);
+  await recordSecurityEvent({
+    userId,
+    eventType: 'LOGOUT',
+    title: 'Dang xuat',
+    description: 'Mot phien dang nhap da duoc dang xuat.',
+    riskLevel: 'LOW',
+  });
   return { message: 'Đăng xuất thành công' };
 };
 
