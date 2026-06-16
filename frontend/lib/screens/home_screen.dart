@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/social_models.dart';
 import '../models/user.dart';
 import '../services/auth_service.dart';
+import '../services/message_recovery_service.dart';
 import '../services/social_service.dart';
 import '../widgets/messenger_avatar.dart';
 import 'account_recovery_request_screen.dart';
@@ -10,6 +11,7 @@ import 'chat_screen.dart';
 import 'friends_screen.dart';
 import 'login_history_screen.dart';
 import 'login_screen.dart';
+import 'message_recovery_setup_screen.dart';
 import 'security_dashboard_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -99,10 +101,15 @@ class ChatsTab extends StatefulWidget {
 
 class _ChatsTabState extends State<ChatsTab> {
   final _socialService = SocialService();
+  final _messageRecoveryService = MessageRecoveryService();
   final _searchController = TextEditingController();
+  final _recoveryCodeController = TextEditingController();
   List<FriendUser> _conversations = [];
+  MessageRecoveryStatus? _recoveryStatus;
   bool _loading = true;
+  bool _verifyingRecovery = false;
   String? _error;
+  String? _recoveryError;
 
   @override
   void initState() {
@@ -113,6 +120,7 @@ class _ChatsTabState extends State<ChatsTab> {
   @override
   void dispose() {
     _searchController.dispose();
+    _recoveryCodeController.dispose();
     super.dispose();
   }
 
@@ -120,8 +128,17 @@ class _ChatsTabState extends State<ChatsTab> {
     setState(() {
       _loading = true;
       _error = null;
+      _recoveryError = null;
     });
     try {
+      final recoveryStatus = await _messageRecoveryService.getStatus();
+      if (!mounted) return;
+      setState(() => _recoveryStatus = recoveryStatus);
+      if (!recoveryStatus.messageRecoveryVerified) {
+        setState(() => _conversations = []);
+        return;
+      }
+
       final conversations = await _socialService.getConversations();
       if (mounted) setState(() => _conversations = conversations);
     } on ApiException catch (error) {
@@ -129,6 +146,40 @@ class _ChatsTabState extends State<ChatsTab> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _verifyMessageRecovery() async {
+    final code = _recoveryCodeController.text.trim();
+    if (code.isEmpty) {
+      setState(() => _recoveryError = 'Vui lòng nhập mã khôi phục tin nhắn');
+      return;
+    }
+
+    setState(() {
+      _verifyingRecovery = true;
+      _recoveryError = null;
+    });
+    try {
+      final message = await _messageRecoveryService.verify(code);
+      if (!mounted) return;
+      _recoveryCodeController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+      await _loadConversations();
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _recoveryError = error.message);
+    } finally {
+      if (mounted) setState(() => _verifyingRecovery = false);
+    }
+  }
+
+  Future<void> _openMessageRecoverySetup() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MessageRecoverySetupScreen()),
+    );
+    if (mounted) _loadConversations();
   }
 
   List<FriendUser> get _filteredConversations {
@@ -173,6 +224,18 @@ class _ChatsTabState extends State<ChatsTab> {
                   message: _error!,
                   actionLabel: 'Thử lại',
                   onAction: _loadConversations,
+                ),
+              )
+            else if (_recoveryStatus?.messageRecoveryVerified == false)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _MessageRecoveryCard(
+                  controller: _recoveryCodeController,
+                  hasRecoveryCode: _recoveryStatus?.hasRecoveryCode == true,
+                  loading: _verifyingRecovery,
+                  error: _recoveryError,
+                  onVerify: _verifyMessageRecovery,
+                  onSetup: _openMessageRecoverySetup,
                 ),
               )
             else if (_filteredConversations.isEmpty)
@@ -286,6 +349,124 @@ class _ChatsTabState extends State<ChatsTab> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _MessageRecoveryCard extends StatelessWidget {
+  final TextEditingController controller;
+  final bool hasRecoveryCode;
+  final bool loading;
+  final String? error;
+  final VoidCallback onVerify;
+  final VoidCallback onSetup;
+
+  const _MessageRecoveryCard({
+    required this.controller,
+    required this.hasRecoveryCode,
+    required this.loading,
+    required this.error,
+    required this.onVerify,
+    required this.onSetup,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Card(
+            elevation: 0,
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 30,
+                    backgroundColor: theme.colorScheme.primaryContainer,
+                    child: Icon(
+                      Icons.lock_reset,
+                      color: theme.colorScheme.onPrimaryContainer,
+                      size: 32,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Khôi phục tin nhắn',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Vì bạn đang đăng nhập trên thiết bị mới, hãy nhập mã khôi phục tin nhắn để xem lại nội dung cũ.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 18),
+                  if (hasRecoveryCode) ...[
+                    TextField(
+                      controller: controller,
+                      obscureText: true,
+                      enabled: !loading,
+                      decoration: const InputDecoration(
+                        labelText: 'Mã khôi phục tin nhắn',
+                        prefixIcon: Icon(Icons.key),
+                      ),
+                      onSubmitted: (_) {
+                        if (!loading) onVerify();
+                      },
+                    ),
+                    if (error != null) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        error!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: loading ? null : onVerify,
+                        icon: loading
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.lock_open),
+                        label: const Text('Khôi phục tin nhắn'),
+                      ),
+                    ),
+                  ] else ...[
+                    Text(
+                      'Tài khoản này chưa tạo mã khôi phục tin nhắn.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: onSetup,
+                        icon: const Icon(Icons.add_moderator),
+                        label: const Text('Tạo mã khôi phục'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -601,7 +782,12 @@ class ProfileTab extends StatelessWidget {
           ),
         );
       }),
-      _ProfileAction(Icons.sms_outlined, 'Mã khôi phục tin nhắn', () {}),
+      _ProfileAction(Icons.sms_outlined, 'Mã khôi phục tin nhắn', () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const MessageRecoverySetupScreen()),
+        );
+      }),
       _ProfileAction(Icons.people, 'Danh sách bạn bè', () {
         Navigator.push(
           context,

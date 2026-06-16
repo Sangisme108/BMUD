@@ -1,4 +1,5 @@
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const pool = require('../config/db');
 const { detectLoginRisk } = require('./anomalyDetectionService');
 const { sendLoginAlertEmail, sendOtpEmail } = require('./emailService');
@@ -46,6 +47,9 @@ const isLoopbackIp = (ipAddress) => {
   const normalizedIp = normalizeIpAddress(ipAddress);
   return normalizedIp === '127.0.0.1' || normalizedIp === '::1';
 };
+
+const hashDeviceFingerprint = (deviceFingerprint) =>
+  crypto.createHash('sha256').update(String(deviceFingerprint)).digest('hex');
 
 const validateEmail = (email) => {
   if (!EMAIL_PATTERN.test(email)) {
@@ -216,14 +220,22 @@ const upsertTrustedDevice = async ({
 }) => {
   await pool.query(
     `INSERT INTO devices
-     (user_id, device_fingerprint, ip_address, user_agent, is_trusted, last_used_at)
-     VALUES (?, ?, ?, ?, TRUE, NOW())
+     (user_id, device_fingerprint, device_fingerprint_hash, ip_address,
+      user_agent, is_trusted, message_recovery_verified, last_used_at)
+     VALUES (?, ?, ?, ?, ?, TRUE, FALSE, NOW())
      ON DUPLICATE KEY UPDATE
+       device_fingerprint_hash = VALUES(device_fingerprint_hash),
        ip_address = VALUES(ip_address),
        user_agent = VALUES(user_agent),
        is_trusted = TRUE,
        last_used_at = NOW()`,
-    [userId, deviceFingerprint, ipAddress, userAgent]
+    [
+      userId,
+      deviceFingerprint,
+      hashDeviceFingerprint(deviceFingerprint),
+      ipAddress,
+      userAgent,
+    ]
   );
 };
 

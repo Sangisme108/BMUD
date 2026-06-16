@@ -6,6 +6,8 @@ const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const securityRoutes = require('./routes/securityRoutes');
 const socialRoutes = require('./routes/socialRoutes');
+const chatCompatibilityRoutes = require('./routes/chatCompatibilityRoutes');
+const messageRecoveryRoutes = require('./routes/messageRecoveryRoutes');
 const {
   requireHttpsInProduction,
   secureHeaders,
@@ -45,6 +47,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/social', socialRoutes);
+app.use('/api', chatCompatibilityRoutes);
+app.use('/api/message-recovery', messageRecoveryRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ message: 'Không tìm thấy endpoint' });

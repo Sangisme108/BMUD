@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const pool = require('../config/db');
+const { resetVerifiedDevices } = require('./messageRecoveryService');
 const {
   sendPasswordResetOtpEmail,
   sendUnlockAccountOtpEmail,
@@ -196,6 +197,7 @@ const resetPassword = async ({ email, otpCode, newPassword }) => {
          WHERE user_id = ?`,
         [userId]
       );
+      await resetVerifiedDevices(userId);
     },
   });
   return { message: 'Mật khẩu đã được thay đổi. Hãy đăng nhập lại.' };

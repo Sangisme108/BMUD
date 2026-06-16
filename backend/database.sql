@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name VARCHAR(120) NOT NULL,
   email VARCHAR(180) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  message_recovery_code_hash VARCHAR(255) NULL,
   is_locked BOOLEAN NOT NULL DEFAULT FALSE,
   lock_until DATETIME NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -19,16 +20,21 @@ CREATE TABLE IF NOT EXISTS devices (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   device_fingerprint VARCHAR(64) NOT NULL,
+  device_fingerprint_hash VARCHAR(64) NULL,
   ip_address VARCHAR(64) NOT NULL,
   user_agent TEXT,
   is_trusted BOOLEAN NOT NULL DEFAULT FALSE,
+  message_recovery_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  message_recovery_verified_at DATETIME NULL,
   last_used_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_devices_user
     FOREIGN KEY (user_id) REFERENCES users(id)
     ON DELETE CASCADE,
   UNIQUE KEY uq_devices_user_fingerprint (user_id, device_fingerprint),
-  INDEX idx_devices_user (user_id)
+  INDEX idx_devices_user (user_id),
+  INDEX idx_devices_message_recovery
+    (user_id, device_fingerprint_hash, message_recovery_verified)
 );
 
 CREATE TABLE IF NOT EXISTS login_attempts (
@@ -161,4 +167,19 @@ CREATE TABLE IF NOT EXISTS messages (
     ON DELETE CASCADE,
   INDEX idx_messages_pair_time (sender_id, receiver_id, id),
   INDEX idx_messages_receiver_read (receiver_id, read_at, id)
+);
+
+CREATE TABLE IF NOT EXISTS message_recovery_attempts (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  ip_address VARCHAR(64) NOT NULL,
+  device_fingerprint_hash VARCHAR(64) NOT NULL,
+  is_successful BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_message_recovery_attempts_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE,
+  INDEX idx_message_recovery_user_time (user_id, created_at),
+  INDEX idx_message_recovery_device_time (device_fingerprint_hash, created_at),
+  INDEX idx_message_recovery_ip_time (ip_address, created_at)
 );

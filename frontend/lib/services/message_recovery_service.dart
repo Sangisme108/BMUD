@@ -4,71 +4,58 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
-import '../models/social_models.dart';
 import 'auth_service.dart';
 import 'device_service.dart';
 
-class SocialService {
+class MessageRecoveryStatus {
+  final bool hasRecoveryCode;
+  final bool messageRecoveryVerified;
+
+  const MessageRecoveryStatus({
+    required this.hasRecoveryCode,
+    required this.messageRecoveryVerified,
+  });
+
+  factory MessageRecoveryStatus.fromJson(Map<String, dynamic> json) {
+    return MessageRecoveryStatus(
+      hasRecoveryCode: json['has_recovery_code'] == true,
+      messageRecoveryVerified: json['message_recovery_verified'] == true,
+    );
+  }
+}
+
+class MessageRecoveryService {
   static const _requestTimeout = Duration(seconds: 15);
   final AuthService _authService = AuthService();
   final DeviceService _deviceService = DeviceService();
 
-  Future<List<FriendUser>> getConversations() async {
-    final data = await _request('GET', '/social/conversations');
-    return _list(
-      data,
-    ).map((item) => FriendUser.fromJson(item as Map<String, dynamic>)).toList();
+  Future<MessageRecoveryStatus> getStatus() async {
+    final data = await _request('GET', '/message-recovery/status');
+    return MessageRecoveryStatus.fromJson(data['data'] as Map<String, dynamic>);
   }
 
-  Future<List<FriendRequest>> getFriendRequests() async {
-    final data = await _request('GET', '/social/friend-requests');
-    return _list(data)
-        .map((item) => FriendRequest.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<List<UserSearchResult>> searchUsers(String query) async {
-    final encoded = Uri.encodeQueryComponent(query.trim());
-    final data = await _request('GET', '/social/users?query=$encoded');
-    return _list(data)
-        .map((item) => UserSearchResult.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<void> sendFriendRequest(int userId) async {
-    await _request(
-      'POST',
-      '/social/friend-requests',
-      body: {'user_id': userId},
-    );
-  }
-
-  Future<void> respondToFriendRequest(int requestId, String action) async {
-    await _request(
-      'POST',
-      '/social/friend-requests/$requestId/respond',
-      body: {'action': action},
-    );
-  }
-
-  Future<List<ChatMessage>> getMessages(int friendId) async {
-    final data = await _request('GET', '/social/messages/$friendId');
-    return _list(data)
-        .map((item) => ChatMessage.fromJson(item as Map<String, dynamic>))
-        .toList();
-  }
-
-  Future<ChatMessage> sendMessage(int friendId, String content) async {
+  Future<String> setup({
+    required String currentPassword,
+    required String recoveryCode,
+  }) async {
     final data = await _request(
       'POST',
-      '/social/messages/$friendId',
-      body: {'content': content},
+      '/message-recovery/setup',
+      body: {
+        'current_password': currentPassword,
+        'recovery_code': recoveryCode,
+      },
     );
-    return ChatMessage.fromJson(data['data'] as Map<String, dynamic>);
+    return data['message']?.toString() ?? 'Đã cập nhật mã khôi phục tin nhắn';
   }
 
-  List<dynamic> _list(Map<String, dynamic> data) {
-    return data['data'] as List<dynamic>? ?? [];
+  Future<String> verify(String recoveryCode) async {
+    final data = await _request(
+      'POST',
+      '/message-recovery/verify',
+      body: {'recovery_code': recoveryCode},
+    );
+    return data['message']?.toString() ?? 'Đã khôi phục quyền xem tin nhắn';
   }
 
   Future<Map<String, dynamic>> _request(
@@ -106,16 +93,20 @@ class SocialService {
   ) async {
     final token = await _authService.getToken();
     final fingerprint = await _deviceService.getDeviceFingerprint();
-    final uri = Uri.parse('${ApiConfig.baseUrl}$path');
     final headers = {
       'Content-Type': 'application/json',
       'X-Device-Fingerprint': fingerprint,
       if (token != null) 'Authorization': 'Bearer $token',
     };
 
+    final mergedBody = {
+      ...?body,
+      'device_fingerprint': fingerprint,
+    };
+    final uri = Uri.parse('${ApiConfig.baseUrl}$path');
     if (method == 'POST') {
       return http
-          .post(uri, headers: headers, body: jsonEncode(body ?? {}))
+          .post(uri, headers: headers, body: jsonEncode(mergedBody))
           .timeout(_requestTimeout);
     }
     return http.get(uri, headers: headers).timeout(_requestTimeout);

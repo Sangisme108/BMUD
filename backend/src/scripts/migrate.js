@@ -101,6 +101,113 @@ const run = async () => {
     } else {
       console.log('Friendship and messaging migration is already applied.');
     }
+
+    const [[messageRecoveryState]] = await connection.query(
+      `SELECT
+         (
+           SELECT COUNT(*)
+           FROM information_schema.columns
+           WHERE table_schema = DATABASE()
+             AND table_name = 'users'
+             AND column_name = 'message_recovery_code_hash'
+         ) AS user_column_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.columns
+           WHERE table_schema = DATABASE()
+             AND table_name = 'devices'
+             AND column_name = 'device_fingerprint_hash'
+         ) AS device_hash_column_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.columns
+           WHERE table_schema = DATABASE()
+             AND table_name = 'devices'
+             AND column_name = 'message_recovery_verified'
+         ) AS device_column_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.columns
+           WHERE table_schema = DATABASE()
+             AND table_name = 'devices'
+             AND column_name = 'message_recovery_verified_at'
+         ) AS device_verified_at_column_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.tables
+           WHERE table_schema = DATABASE()
+             AND table_name = 'message_recovery_attempts'
+         ) AS attempts_table_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.statistics
+           WHERE table_schema = DATABASE()
+             AND table_name = 'devices'
+             AND index_name = 'idx_devices_message_recovery'
+         ) AS devices_recovery_index_ready`
+    );
+
+    if (Number(messageRecoveryState.user_column_ready) === 0) {
+      await connection.query(
+        `ALTER TABLE users
+         ADD COLUMN message_recovery_code_hash VARCHAR(255) NULL AFTER password_hash`
+      );
+    }
+    if (Number(messageRecoveryState.device_hash_column_ready) === 0) {
+      await connection.query(
+        `ALTER TABLE devices
+         ADD COLUMN device_fingerprint_hash VARCHAR(64) NULL AFTER device_fingerprint`
+      );
+    }
+    if (Number(messageRecoveryState.device_column_ready) === 0) {
+      await connection.query(
+        `ALTER TABLE devices
+         ADD COLUMN message_recovery_verified BOOLEAN NOT NULL DEFAULT FALSE AFTER is_trusted`
+      );
+    }
+    if (Number(messageRecoveryState.device_verified_at_column_ready) === 0) {
+      await connection.query(
+        `ALTER TABLE devices
+         ADD COLUMN message_recovery_verified_at DATETIME NULL AFTER message_recovery_verified`
+      );
+    }
+    if (Number(messageRecoveryState.attempts_table_ready) === 0) {
+      await connection.query(
+        `CREATE TABLE IF NOT EXISTS message_recovery_attempts (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY,
+          user_id INT NOT NULL,
+          ip_address VARCHAR(64) NOT NULL,
+          device_fingerprint_hash VARCHAR(64) NOT NULL,
+          is_successful BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT fk_message_recovery_attempts_user
+            FOREIGN KEY (user_id) REFERENCES users(id)
+            ON DELETE CASCADE,
+          INDEX idx_message_recovery_user_time (user_id, created_at),
+          INDEX idx_message_recovery_device_time (device_fingerprint_hash, created_at),
+          INDEX idx_message_recovery_ip_time (ip_address, created_at)
+        )`
+      );
+    }
+    if (Number(messageRecoveryState.devices_recovery_index_ready) === 0) {
+      await connection.query(
+        `CREATE INDEX idx_devices_message_recovery
+         ON devices (user_id, device_fingerprint_hash, message_recovery_verified)`
+      );
+    }
+
+    if (
+      Number(messageRecoveryState.user_column_ready) === 0 ||
+      Number(messageRecoveryState.device_hash_column_ready) === 0 ||
+      Number(messageRecoveryState.device_column_ready) === 0 ||
+      Number(messageRecoveryState.device_verified_at_column_ready) === 0 ||
+      Number(messageRecoveryState.attempts_table_ready) === 0 ||
+      Number(messageRecoveryState.devices_recovery_index_ready) === 0
+    ) {
+      console.log('Message recovery migration completed.');
+    } else {
+      console.log('Message recovery migration is already applied.');
+    }
   } finally {
     await connection.end();
   }

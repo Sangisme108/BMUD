@@ -11,19 +11,7 @@ const router = express.Router();
 
 router.use(authMiddleware);
 router.use(socialRateLimiter);
-router.get('/users', socialController.searchUsers);
-router.get('/friends', socialController.getFriends);
-router.get('/friend-requests', socialController.getFriendRequests);
-router.post(
-  '/friend-requests',
-  socialWriteRateLimiter,
-  socialController.sendFriendRequest
-);
-router.post(
-  '/friend-requests/:id/respond',
-  socialWriteRateLimiter,
-  socialController.respondToFriendRequest
-);
+
 router.get(
   '/conversations',
   requireMessageRecovery,
