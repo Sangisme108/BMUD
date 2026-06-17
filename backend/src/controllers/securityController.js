@@ -1,6 +1,26 @@
 const pool = require('../config/db');
 const deviceManagementService = require('../services/deviceManagementService');
 
+const isMissingTableError = (error) => error.code === 'ER_NO_SUCH_TABLE';
+
+const querySecurityEvents = async (userId, limit = 10) => {
+  try {
+    const [events] = await pool.query(
+      `SELECT id, event_type, title, description, ip_address, user_agent,
+              risk_level, metadata, created_at
+       FROM security_events
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [userId, limit]
+    );
+    return events;
+  } catch (error) {
+    if (isMissingTableError(error)) return [];
+    throw error;
+  }
+};
+
 const getLoginHistory = async (req, res, next) => {
   try {
     const [rows] = await pool.query(
@@ -49,15 +69,7 @@ const getDashboard = async (req, res, next) => {
       [req.user.id]
     );
 
-    const [events] = await pool.query(
-      `SELECT id, event_type, title, description, ip_address, user_agent,
-              risk_level, created_at
-       FROM security_events
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 10`,
-      [req.user.id]
-    );
+    const events = await querySecurityEvents(req.user.id, 10);
 
     res.json({
       total_logins: Number(summary.total_logins || 0),
@@ -75,15 +87,7 @@ const getDashboard = async (req, res, next) => {
 
 const getSecurityEvents = async (req, res, next) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT id, event_type, title, description, ip_address, user_agent,
-              risk_level, metadata, created_at
-       FROM security_events
-       WHERE user_id = ?
-       ORDER BY created_at DESC
-       LIMIT 100`,
-      [req.user.id]
-    );
+    const rows = await querySecurityEvents(req.user.id, 100);
     res.json({ data: rows });
   } catch (error) {
     next(error);

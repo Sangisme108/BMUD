@@ -8,10 +8,7 @@ const securityRoutes = require('./routes/securityRoutes');
 const socialRoutes = require('./routes/socialRoutes');
 const chatCompatibilityRoutes = require('./routes/chatCompatibilityRoutes');
 const messageRecoveryRoutes = require('./routes/messageRecoveryRoutes');
-const {
-  requireHttpsInProduction,
-  secureHeaders,
-} = require('./middleware/securityMiddleware');
+const { secureHeaders } = require('./middleware/securityMiddleware');
 
 const app = express();
 
@@ -25,7 +22,6 @@ const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .filter(Boolean);
 
 app.use(secureHeaders);
-app.use(requireHttpsInProduction);
 app.use(
   cors({
     origin(origin, callback) {

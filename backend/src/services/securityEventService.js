@@ -28,23 +28,31 @@ const recordSecurityEvent = async ({
   metadata = null,
 }) => {
   if (!eventType || !title) return;
-  await pool.query(
-    `INSERT INTO security_events
-     (user_id, event_type, title, description, ip_address, user_agent,
-      device_fingerprint_hash, risk_level, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      userId,
-      eventType,
-      title,
-      description,
-      ipAddress ? normalizeIpAddress(ipAddress) : null,
-      userAgent,
-      deviceFingerprintHash || hashDeviceFingerprint(deviceFingerprint),
-      riskLevel,
-      metadata ? JSON.stringify(metadata) : null,
-    ]
-  );
+  try {
+    await pool.query(
+      `INSERT INTO security_events
+       (user_id, event_type, title, description, ip_address, user_agent,
+        device_fingerprint_hash, risk_level, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        eventType,
+        title,
+        description,
+        ipAddress ? normalizeIpAddress(ipAddress) : null,
+        userAgent,
+        deviceFingerprintHash || hashDeviceFingerprint(deviceFingerprint),
+        riskLevel,
+        metadata ? JSON.stringify(metadata) : null,
+      ]
+    );
+  } catch (error) {
+    if (error.code === 'ER_NO_SUCH_TABLE') {
+      console.warn('security_events table is missing; skipped security event log');
+      return;
+    }
+    throw error;
+  }
 };
 
 module.exports = {
