@@ -22,10 +22,6 @@ const {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const LOCK_MINUTES = 15;
-const ACCOUNT_FAILURE_LIMIT = Number.parseInt(
-  process.env.AUTH_ACCOUNT_FAILURE_LIMIT || '5',
-  10
-);
 const EMAIL_IP_FAILURE_LIMIT = Number.parseInt(
   process.env.AUTH_EMAIL_IP_FAILURE_LIMIT || '5',
   10
@@ -147,7 +143,6 @@ const getRecentFailureCounts = async ({ email, ipAddress }) => {
   const normalizedIp = normalizeIpAddress(ipAddress);
   const [[counts]] = await pool.query(
     `SELECT
-       SUM(email = ?) AS email_count,
        SUM(ip_address = ?) AS ip_count,
        SUM(email = ? AND ip_address = ?) AS email_ip_count
      FROM login_attempts
@@ -155,76 +150,113 @@ const getRecentFailureCounts = async ({ email, ipAddress }) => {
        AND is_resolved = FALSE
        AND created_at >= (NOW() - INTERVAL 15 MINUTE)
        AND (email = ? OR ip_address = ?)`,
-    [email, normalizedIp, email, normalizedIp, email, normalizedIp]
+    [normalizedIp, email, normalizedIp, email, normalizedIp]
   );
 
   return {
-    emailCount: Number(counts.email_count || 0),
     ipCount: Number(counts.ip_count || 0),
     emailIpCount: Number(counts.email_ip_count || 0),
   };
 };
 
-const lockUserIfThresholdReached = async ({ userId, email, ipAddress }) => {
-  const counts = await getRecentFailureCounts({ email, ipAddress });
-  if (userId && counts.emailCount >= ACCOUNT_FAILURE_LIMIT) {
+const getActiveIpLockout = async ({ email, ipAddress }) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedIp = normalizeIpAddress(ipAddress);
+  const [[lockout]] = await pool.query(
+    `SELECT locked_until, failure_count
+     FROM ip_device_lockouts
+     WHERE email = ?
+       AND ip_address = ?
+       AND locked_until > NOW()
+     LIMIT 1`,
+    [normalizedEmail, normalizedIp]
+  );
+  return lockout || null;
+};
+
+const lockEmailIpIfThresholdReached = async ({
+  email,
+  ipAddress,
+  deviceFingerprint = null,
+}) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedIp = normalizeIpAddress(ipAddress);
+  const counts = await getRecentFailureCounts({
+    email: normalizedEmail,
+    ipAddress: normalizedIp,
+  });
+
+  if (counts.emailIpCount >= EMAIL_IP_FAILURE_LIMIT) {
     await pool.query(
-      `UPDATE users
-       SET is_locked = TRUE,
-           lock_until = DATE_ADD(NOW(), INTERVAL ? MINUTE)
-       WHERE id = ?`,
-      [LOCK_MINUTES, userId]
+      `INSERT INTO ip_device_lockouts
+       (email, ip_address, device_fingerprint, locked_until, failure_count, unlock_reason)
+       VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE), ?, 'TOO_MANY_FAILED_ATTEMPTS')
+       ON DUPLICATE KEY UPDATE
+         device_fingerprint = VALUES(device_fingerprint),
+         locked_until = DATE_ADD(NOW(), INTERVAL ? MINUTE),
+         failure_count = VALUES(failure_count),
+         unlock_reason = 'TOO_MANY_FAILED_ATTEMPTS'`,
+      [
+        normalizedEmail,
+        normalizedIp,
+        deviceFingerprint,
+        LOCK_MINUTES,
+        counts.emailIpCount,
+        LOCK_MINUTES,
+      ]
     );
   }
+
   return counts;
+};
+
+const clearIpLockoutOnSuccess = async ({ email, ipAddress, db = pool }) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedIp = normalizeIpAddress(ipAddress);
+
+  await db.query(
+    `DELETE FROM ip_device_lockouts
+     WHERE email = ?
+       AND ip_address = ?`,
+    [normalizedEmail, normalizedIp]
+  );
+  await db.query(
+    `UPDATE login_attempts
+     SET is_resolved = TRUE
+     WHERE email = ?
+       AND ip_address = ?
+       AND failure_type = 'INVALID_CREDENTIALS'`,
+    [normalizedEmail, normalizedIp]
+  );
+};
+
+const assertIpLockout = async ({ email, ipAddress }) => {
+  const lockout = await getActiveIpLockout({ email, ipAddress });
+  if (!lockout) {
+    return null;
+  }
+
+  throw createHttpError(
+    `Đăng nhập từ địa chỉ IP này đang bị khóa tạm thời đến ${new Date(lockout.locked_until).toLocaleString('vi-VN')}. Bạn vẫn có thể đăng nhập từ IP khác.`,
+    423
+  );
 };
 
 const assertLoginAllowed = async ({ email, ipAddress }) => {
   const normalizedEmail = normalizeEmail(email);
-  const [[user]] = await pool.query(
-    'SELECT id, is_locked, lock_until FROM users WHERE email = ?',
-    [normalizedEmail]
-  );
-
-  if (user?.is_locked && user.lock_until && new Date(user.lock_until) > new Date()) {
-    throw createHttpError(
-      `Tài khoản đang bị khóa tạm thời đến ${new Date(user.lock_until).toLocaleString('vi-VN')}`,
-      423
-    );
-  }
-
-  if (user?.is_locked) {
-    await pool.query(
-      'UPDATE users SET is_locked = FALSE, lock_until = NULL WHERE id = ?',
-      [user.id]
-    );
-  }
+  await assertIpLockout({ email: normalizedEmail, ipAddress });
 
   const counts = await getRecentFailureCounts({
     email: normalizedEmail,
     ipAddress,
   });
-  if (user && counts.emailCount >= ACCOUNT_FAILURE_LIMIT) {
-    await lockUserIfThresholdReached({
-      userId: user.id,
+
+  if (counts.emailIpCount >= EMAIL_IP_FAILURE_LIMIT) {
+    await lockEmailIpIfThresholdReached({
       email: normalizedEmail,
       ipAddress,
     });
-    throw createHttpError('Tài khoản đang bị khóa tạm thời trong 15 phút', 423);
-  }
-
-  if (counts.emailIpCount >= EMAIL_IP_FAILURE_LIMIT) {
-    throw createHttpError(
-      'Email này có quá nhiều lần đăng nhập thất bại từ cùng một địa chỉ IP. Vui lòng thử lại sau.',
-      429
-    );
-  }
-
-  if (counts.emailCount >= ACCOUNT_FAILURE_LIMIT) {
-    throw createHttpError(
-      'Email này có quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau.',
-      429
-    );
+    await assertIpLockout({ email: normalizedEmail, ipAddress });
   }
 
   if (!isLoopbackIp(ipAddress) && counts.ipCount >= IP_FAILURE_LIMIT) {
@@ -324,16 +356,11 @@ const completeLogin = async ({
     db,
   });
 
-  await db.query(
-    `UPDATE login_attempts
-     SET is_resolved = TRUE
-     WHERE email = ? AND failure_type = 'INVALID_CREDENTIALS'`,
-    [email]
-  );
-  await db.query(
-    'UPDATE users SET is_locked = FALSE, lock_until = NULL WHERE id = ?',
-    [user.id]
-  );
+  await clearIpLockoutOnSuccess({
+    email,
+    ipAddress,
+    db,
+  });
   await recordSecurityEvent({
     userId: user.id,
     eventType: 'LOGIN_SUCCESS',
@@ -696,14 +723,15 @@ const login = async ({
       userId: user?.id,
       email: normalizedEmail,
       ...context,
+      deviceFingerprint: deviceIdHash,
       isSuccessful: false,
       failureType: 'INVALID_CREDENTIALS',
       reason: 'INVALID_CREDENTIALS',
     });
-    await lockUserIfThresholdReached({
-      userId: user?.id,
+    await lockEmailIpIfThresholdReached({
       email: normalizedEmail,
       ipAddress: context.ipAddress,
+      deviceFingerprint: deviceIdHash,
     });
     await recordSecurityEvent({
       userId: user?.id || null,
