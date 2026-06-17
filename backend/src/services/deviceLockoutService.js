@@ -5,6 +5,7 @@
  */
 
 const pool = require('../config/db');
+const { hashDeviceId } = require('./sessionService');
 
 const DEVICE_LOCK_MINUTES = 15;
 const DEVICE_FAILURE_LIMIT = Number.parseInt(
@@ -16,6 +17,9 @@ const normalizeEmail = (email = '') => email.toLowerCase().trim();
 
 const normalizeIpAddress = (ipAddress = '') =>
   ipAddress.startsWith('::ffff:') ? ipAddress.slice(7) : ipAddress;
+
+const normalizeDeviceFingerprint = (deviceFingerprint) =>
+  hashDeviceId(deviceFingerprint);
 
 const createHttpError = (message, statusCode) => {
   const error = new Error(message);
@@ -32,6 +36,7 @@ const getRecentDeviceFailureCount = async ({
   deviceFingerprint,
 }) => {
   const normalizedEmail = normalizeEmail(email);
+  const normalizedDeviceFingerprint = normalizeDeviceFingerprint(deviceFingerprint);
 
   const [[count]] = await pool.query(
     `SELECT COUNT(*) AS failure_count
@@ -41,7 +46,7 @@ const getRecentDeviceFailureCount = async ({
        AND is_successful = FALSE
        AND failure_type = 'INVALID_CREDENTIALS'
        AND created_at >= (NOW() - INTERVAL ? MINUTE)`,
-    [normalizedEmail, deviceFingerprint, DEVICE_LOCK_MINUTES]
+    [normalizedEmail, normalizedDeviceFingerprint, DEVICE_LOCK_MINUTES]
   );
 
   return Number(count?.failure_count || 0);
@@ -52,6 +57,7 @@ const getRecentDeviceFailureCount = async ({
  */
 const getActiveDeviceLockout = async ({ email, deviceFingerprint }) => {
   const normalizedEmail = normalizeEmail(email);
+  const normalizedDeviceFingerprint = normalizeDeviceFingerprint(deviceFingerprint);
 
   const [[lockout]] = await pool.query(
     `SELECT id, locked_until, failure_count, reason
@@ -60,7 +66,7 @@ const getActiveDeviceLockout = async ({ email, deviceFingerprint }) => {
        AND device_fingerprint = ?
        AND locked_until > NOW()
      LIMIT 1`,
-    [normalizedEmail, deviceFingerprint]
+    [normalizedEmail, normalizedDeviceFingerprint]
   );
 
   return lockout || null;
@@ -79,10 +85,11 @@ const lockDeviceIfThresholdReached = async ({
 }) => {
   const normalizedEmail = normalizeEmail(email);
   const normalizedIp = normalizeIpAddress(ipAddress);
+  const normalizedDeviceFingerprint = normalizeDeviceFingerprint(deviceFingerprint);
 
   const failureCount = await getRecentDeviceFailureCount({
     email: normalizedEmail,
-    deviceFingerprint,
+    deviceFingerprint: normalizedDeviceFingerprint,
   });
 
   if (failureCount >= DEVICE_FAILURE_LIMIT) {
@@ -101,7 +108,7 @@ const lockDeviceIfThresholdReached = async ({
       [
         userId,
         normalizedEmail,
-        deviceFingerprint,
+        normalizedDeviceFingerprint,
         deviceName,
         normalizedIp,
         userAgent,
@@ -126,13 +133,14 @@ const clearDeviceLockoutOnSuccess = async ({
   db = pool,
 }) => {
   const normalizedEmail = normalizeEmail(email);
+  const normalizedDeviceFingerprint = normalizeDeviceFingerprint(deviceFingerprint);
 
   // Delete lockout record
   await db.query(
     `DELETE FROM device_lockouts
      WHERE email = ?
        AND device_fingerprint = ?`,
-    [normalizedEmail, deviceFingerprint]
+    [normalizedEmail, normalizedDeviceFingerprint]
   );
 
   // Mark all related failed attempts as resolved
@@ -142,7 +150,7 @@ const clearDeviceLockoutOnSuccess = async ({
      WHERE email = ?
        AND device_fingerprint = ?
        AND is_successful = FALSE`,
-    [normalizedEmail, deviceFingerprint]
+    [normalizedEmail, normalizedDeviceFingerprint]
   );
 };
 
@@ -178,7 +186,7 @@ const willDeviceBeLocked = async ({ email, deviceFingerprint }) => {
  * Get all locked devices for a user
  */
 const getLockedDevicesForUser = async ({ userId }) => {
-  const [[devices]] = await pool.query(
+  const [devices] = await pool.query(
     `SELECT 
        email, 
        device_fingerprint,
@@ -203,12 +211,13 @@ const getLockedDevicesForUser = async ({ userId }) => {
  */
 const unlockDeviceManual = async ({ email, deviceFingerprint, reason = 'MANUAL_UNLOCK' }) => {
   const normalizedEmail = normalizeEmail(email);
+  const normalizedDeviceFingerprint = normalizeDeviceFingerprint(deviceFingerprint);
 
   const [result] = await pool.query(
     `DELETE FROM device_lockouts
      WHERE email = ?
        AND device_fingerprint = ?`,
-    [normalizedEmail, deviceFingerprint]
+    [normalizedEmail, normalizedDeviceFingerprint]
   );
 
   return result.affectedRows > 0;

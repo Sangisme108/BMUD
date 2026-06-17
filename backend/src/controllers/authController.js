@@ -277,7 +277,12 @@ const getLockedDevices = async (req, res, next) => {
 
 const unlockDevice = async (req, res, next) => {
   try {
-    const { deviceFingerprint } = req.params;
+    const deviceFingerprint =
+      req.params.deviceFingerprint ||
+      req.body.deviceFingerprint ||
+      req.body.device_fingerprint ||
+      req.body.deviceId ||
+      req.body.device_id;
     if (!deviceFingerprint) {
       return res.status(400).json({ message: 'Thiếu device fingerprint' });
     }

@@ -65,7 +65,30 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   INDEX idx_login_attempts_ip_time (ip_address, created_at),
   INDEX idx_login_attempts_user_time (user_id, created_at),
   INDEX idx_login_attempts_failure_time (failure_type, created_at),
-  INDEX idx_login_attempts_email_ip_time (email, ip_address, created_at)
+  INDEX idx_login_attempts_email_ip_time (email, ip_address, created_at),
+  INDEX idx_login_attempts_email_device_time (email, device_fingerprint, created_at)
+);
+
+CREATE TABLE IF NOT EXISTS device_lockouts (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NULL,
+  email VARCHAR(180) NOT NULL,
+  device_fingerprint VARCHAR(64) NOT NULL,
+  device_name VARCHAR(255),
+  ip_address VARCHAR(64),
+  user_agent TEXT,
+  locked_until DATETIME NOT NULL,
+  failure_count INT NOT NULL DEFAULT 5,
+  reason VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_device_lockouts_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE,
+  UNIQUE KEY uq_device_lockouts_email_device (email, device_fingerprint),
+  INDEX idx_device_lockouts_locked_until (locked_until),
+  INDEX idx_device_lockouts_user (user_id),
+  INDEX idx_device_lockouts_email_device_until (email, device_fingerprint, locked_until)
 );
 
 CREATE TABLE IF NOT EXISTS ip_device_lockouts (

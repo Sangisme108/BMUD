@@ -28,6 +28,7 @@ router.post('/verify-otp', authRateLimiter, authController.verifyOtp);
 router.post('/refresh', authRateLimiter, authController.refresh);
 router.post('/logout', authRateLimiter, authController.logout);
 router.get('/devices', authRateLimiter, authMiddleware, authController.getDevices);
+router.get('/my-devices', authRateLimiter, authMiddleware, authController.getDevices);
 router.get(
   '/devices/locked',
   authRateLimiter,
@@ -48,6 +49,12 @@ router.post(
 );
 router.post(
   '/devices/:deviceFingerprint/unlock',
+  authRateLimiter,
+  authMiddleware,
+  authController.unlockDevice
+);
+router.post(
+  '/unlock-device',
   authRateLimiter,
   authMiddleware,
   authController.unlockDevice

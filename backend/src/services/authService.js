@@ -22,11 +22,12 @@ const {
 const {
   lockDeviceIfThresholdReached,
   clearDeviceLockoutOnSuccess,
+  assertDeviceNotLocked,
 } = require('./deviceLockoutService');
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const LOCK_MINUTES = 15;
-const EMAIL_IP_FAILURE_LIMIT = Number.parseInt(
+const LEGACY_LOCK_MINUTES = 15;
+const LEGACY_EMAIL_IP_FAILURE_LIMIT = Number.parseInt(
   process.env.AUTH_EMAIL_IP_FAILURE_LIMIT || '5',
   10
 );
@@ -190,7 +191,7 @@ const lockEmailIpIfThresholdReached = async ({
     ipAddress: normalizedIp,
   });
 
-  if (counts.emailIpCount >= EMAIL_IP_FAILURE_LIMIT) {
+  if (counts.emailIpCount >= LEGACY_EMAIL_IP_FAILURE_LIMIT) {
     await pool.query(
       `INSERT INTO ip_device_lockouts
        (email, ip_address, device_fingerprint, locked_until, failure_count, unlock_reason)
@@ -204,9 +205,9 @@ const lockEmailIpIfThresholdReached = async ({
         normalizedEmail,
         normalizedIp,
         deviceFingerprint,
-        LOCK_MINUTES,
+        LEGACY_LOCK_MINUTES,
         counts.emailIpCount,
-        LOCK_MINUTES,
+        LEGACY_LOCK_MINUTES,
       ]
     );
   }
@@ -246,22 +247,21 @@ const assertIpLockout = async ({ email, ipAddress }) => {
   );
 };
 
-const assertLoginAllowed = async ({ email, ipAddress }) => {
+const assertLoginAllowed = async ({ email, ipAddress, deviceFingerprint }) => {
   const normalizedEmail = normalizeEmail(email);
-  await assertIpLockout({ email: normalizedEmail, ipAddress });
+
+  if (deviceFingerprint) {
+    await assertDeviceNotLocked({
+      email: normalizedEmail,
+      deviceFingerprint,
+    });
+    return;
+  }
 
   const counts = await getRecentFailureCounts({
     email: normalizedEmail,
     ipAddress,
   });
-
-  if (counts.emailIpCount >= EMAIL_IP_FAILURE_LIMIT) {
-    await lockEmailIpIfThresholdReached({
-      email: normalizedEmail,
-      ipAddress,
-    });
-    await assertIpLockout({ email: normalizedEmail, ipAddress });
-  }
 
   if (!isLoopbackIp(ipAddress) && counts.ipCount >= IP_FAILURE_LIMIT) {
     throw createHttpError(
@@ -368,11 +368,6 @@ const completeLogin = async ({
     db,
   });
 
-  await clearIpLockoutOnSuccess({
-    email,
-    ipAddress,
-    db,
-  });
   await recordSecurityEvent({
     userId: user.id,
     eventType: 'LOGIN_SUCCESS',
@@ -723,6 +718,7 @@ const login = async ({
   await assertLoginAllowed({
     email: normalizedEmail,
     ipAddress: context.ipAddress,
+    deviceFingerprint: deviceIdHash,
   });
 
   const [[user]] = await pool.query(
@@ -748,12 +744,6 @@ const login = async ({
       deviceName,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
-    });
-    // Lock email+IP (legacy brute force protection)
-    await lockEmailIpIfThresholdReached({
-      email: normalizedEmail,
-      ipAddress: context.ipAddress,
-      deviceFingerprint: deviceIdHash,
     });
     await recordSecurityEvent({
       userId: user?.id || null,

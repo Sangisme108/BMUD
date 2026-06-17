@@ -44,11 +44,21 @@ const listDevices = async (userId, currentSessionId = null) => {
        ls.last_seen_at,
        ls.created_at,
        d.message_recovery_verified,
-       d.revoked_at AS device_revoked_at
+       d.revoked_at AS device_revoked_at,
+       dl.locked_until,
+       dl.failure_count AS lock_failure_count,
+       dl.reason AS lock_reason,
+       COALESCE(dl.ip_address, ls.ip_address) AS last_ip
      FROM login_sessions ls
      LEFT JOIN devices d
        ON d.user_id = ls.user_id
       AND d.device_fingerprint = ls.device_id_hash
+     JOIN users u
+       ON u.id = ls.user_id
+     LEFT JOIN device_lockouts dl
+       ON dl.email = u.email
+      AND dl.device_fingerprint = ls.device_id_hash
+      AND dl.locked_until > NOW()
      WHERE ls.user_id = ?
        AND ls.is_active = TRUE
        AND ls.revoked_at IS NULL
@@ -67,8 +77,13 @@ const listDevices = async (userId, currentSessionId = null) => {
     ),
     deviceType: row.device_type || 'unknown',
     operatingSystem: inferOs(row.user_agent, row.operating_system),
-    ipAddress: row.ip_address,
+    ipAddress: row.last_ip || row.ip_address,
+    lastIp: row.last_ip || row.ip_address,
     lastSeenAt: row.last_seen_at,
+    isLocked: Boolean(row.locked_until),
+    lockedUntil: row.locked_until,
+    lockFailureCount: row.lock_failure_count,
+    lockReason: row.lock_reason,
     isTrusted: Boolean(row.is_trusted) && !row.device_revoked_at,
     isCurrentDevice: currentSessionId
       ? row.session_id === currentSessionId

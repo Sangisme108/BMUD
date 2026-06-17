@@ -32,8 +32,11 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_lock_until DATETIME NULL;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_lock_reason VARCHAR(255);
 
 -- Add index for querying locked devices
-CREATE INDEX IF NOT EXISTS idx_devices_lock_status 
+CREATE INDEX idx_devices_lock_status 
 ON devices(user_id, is_device_locked, device_lock_until);
+
+CREATE INDEX idx_login_attempts_email_device_time
+ON login_attempts(email, device_fingerprint, created_at);
 
 -- Drop global lock columns from users (optional - keep for backward compatibility)
 -- ALTER TABLE users DROP COLUMN IF EXISTS is_locked;

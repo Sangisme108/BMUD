@@ -72,10 +72,17 @@ class DeviceIdentityService {
   }
 
   Future<Map<String, String>> getDevicePayload() async {
+    final deviceId = await getOrCreateDeviceId();
+    final deviceFingerprint = await getDeviceFingerprint();
+    final deviceName = await getDeviceName();
+    final deviceType = await getDeviceType();
     return {
-      'deviceId': await getOrCreateDeviceId(),
-      'deviceName': await getDeviceName(),
-      'deviceType': await getDeviceType(),
+      'deviceId': deviceId,
+      'device_fingerprint': deviceFingerprint,
+      'deviceName': deviceName,
+      'device_name': deviceName,
+      'deviceType': deviceType,
+      'device_type': deviceType,
       'operatingSystem': await getOperatingSystem(),
     };
   }

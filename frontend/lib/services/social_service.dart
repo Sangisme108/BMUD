@@ -103,6 +103,16 @@ class SocialService {
         }
         if (await _authService.refreshSession()) {
           response = await _send(method, path, body);
+        } else {
+          await SessionManager.instance.handleSessionRevoked(
+            message: 'Phien dang nhap da het han, vui long dang nhap lai.',
+          );
+          throw ApiException(
+            firstError['message']?.toString() ??
+                'Phien dang nhap da het han',
+            statusCode: 401,
+            errorCode: errorCode,
+          );
         }
       }
 
