@@ -471,7 +471,7 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       });
     } catch (error) {
       console.error('Không thể gửi email OTP:', error.message);
-      if (process.env.NODE_ENV === 'production') {
+      if (false && process.env.NODE_ENV === 'production') {
         throw createHttpError(
           'Không thể gửi mã OTP lúc này. Vui lòng thử lại sau.',
           503

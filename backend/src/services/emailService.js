@@ -14,7 +14,7 @@ const readTimeout = (name, fallback) => {
 };
 
 const sendMailWithTimeout = async (transporter, mailOptions) => {
-  const timeoutMs = readTimeout('EMAIL_SEND_TIMEOUT_MS', 10000);
+  const timeoutMs = readTimeout('EMAIL_SEND_TIMEOUT_MS', 30000);
   let timeoutId;
   const timeout = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
