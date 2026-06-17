@@ -8,6 +8,30 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 
+const readTimeout = (name, fallback) => {
+  const value = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+const sendMailWithTimeout = async (transporter, mailOptions) => {
+  const timeoutMs = readTimeout('EMAIL_SEND_TIMEOUT_MS', 10000);
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error('Gửi email quá lâu. Vui lòng thử lại sau.');
+      error.statusCode = 503;
+      error.code = 'EMAIL_SEND_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([transporter.sendMail(mailOptions), timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
 const sendLoginAlertEmail = async ({
   user,
   ipAddress,
@@ -22,7 +46,7 @@ const sendLoginAlertEmail = async ({
     return false;
   }
 
-  await transporter.sendMail({
+  await sendMailWithTimeout(transporter, {
     from: process.env.EMAIL_USER,
     to: user.email,
     subject: 'Cảnh báo đăng nhập bất thường',
@@ -55,7 +79,7 @@ const sendOtpEmail = async ({
     return false;
   }
 
-  await transporter.sendMail({
+  await sendMailWithTimeout(transporter, {
     from: process.env.EMAIL_USER,
     to: user.email,
     subject: 'Mã OTP xác thực thiết bị đăng nhập',
@@ -87,7 +111,7 @@ const sendRecoveryOtpEmail = async ({
     throw error;
   }
 
-  await transporter.sendMail({
+  await sendMailWithTimeout(transporter, {
     from: process.env.EMAIL_USER,
     to: user.email,
     subject,

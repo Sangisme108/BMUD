@@ -36,3 +36,11 @@ services:
         sync: false
       - key: EMAIL_PASS
         sync: false
+      - key: EMAIL_CONNECTION_TIMEOUT_MS
+        value: "8000"
+      - key: EMAIL_GREETING_TIMEOUT_MS
+        value: "8000"
+      - key: EMAIL_SOCKET_TIMEOUT_MS
+        value: "10000"
+      - key: EMAIL_SEND_TIMEOUT_MS
+        value: "10000"
