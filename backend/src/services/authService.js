@@ -19,6 +19,10 @@ const {
   revokeRefreshToken,
   rotateRefreshToken,
 } = require('./tokenService');
+const {
+  lockDeviceIfThresholdReached,
+  clearDeviceLockoutOnSuccess,
+} = require('./deviceLockoutService');
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const LOCK_MINUTES = 15;
@@ -353,6 +357,14 @@ const completeLogin = async ({
     isSuccessful: true,
     riskLevel,
     reason,
+    db,
+  });
+
+  // Clear device lockout (per-device brute force protection)
+  const deviceIdHash = hashDeviceId(deviceId);
+  await clearDeviceLockoutOnSuccess({
+    email,
+    deviceFingerprint: deviceIdHash,
     db,
   });
 
@@ -728,6 +740,16 @@ const login = async ({
       failureType: 'INVALID_CREDENTIALS',
       reason: 'INVALID_CREDENTIALS',
     });
+    // Lock device after repeated failures
+    await lockDeviceIfThresholdReached({
+      userId: user?.id,
+      email: normalizedEmail,
+      deviceFingerprint: deviceIdHash,
+      deviceName,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
+    // Lock email+IP (legacy brute force protection)
     await lockEmailIpIfThresholdReached({
       email: normalizedEmail,
       ipAddress: context.ipAddress,

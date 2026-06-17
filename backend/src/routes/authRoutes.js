@@ -28,6 +28,12 @@ router.post('/verify-otp', authRateLimiter, authController.verifyOtp);
 router.post('/refresh', authRateLimiter, authController.refresh);
 router.post('/logout', authRateLimiter, authController.logout);
 router.get('/devices', authRateLimiter, authMiddleware, authController.getDevices);
+router.get(
+  '/devices/locked',
+  authRateLimiter,
+  authMiddleware,
+  authController.getLockedDevices
+);
 router.delete(
   '/devices/:deviceRecordId',
   authRateLimiter,
@@ -39,6 +45,12 @@ router.post(
   authRateLimiter,
   authMiddleware,
   authController.revokeDevice
+);
+router.post(
+  '/devices/:deviceFingerprint/unlock',
+  authRateLimiter,
+  authMiddleware,
+  authController.unlockDevice
 );
 router.post(
   '/forgot-password',

@@ -1,6 +1,7 @@
 const authService = require('../services/authService');
 const accountRecoveryService = require('../services/accountRecoveryService');
 const deviceManagementService = require('../services/deviceManagementService');
+const { getLockedDevicesForUser, unlockDeviceManual } = require('../services/deviceLockoutService');
 
 const parseDevicePayload = (body = {}) => ({
   deviceId:
@@ -259,8 +260,53 @@ const unlockAccount = async (req, res, next) => {
   }
 };
 
+const getLockedDevices = async (req, res, next) => {
+  try {
+    const lockedDevices = await getLockedDevicesForUser({
+      userId: req.user.id,
+    });
+    return res.json({
+      success: true,
+      data: lockedDevices,
+      message: `Bạn có ${lockedDevices.length} thiết bị bị khóa`,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const unlockDevice = async (req, res, next) => {
+  try {
+    const { deviceFingerprint } = req.params;
+    if (!deviceFingerprint) {
+      return res.status(400).json({ message: 'Thiếu device fingerprint' });
+    }
+
+    const result = await unlockDeviceManual({
+      email: req.user.email,
+      deviceFingerprint,
+      reason: 'USER_REQUESTED',
+    });
+
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy thiết bị bị khóa này',
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Đã mở khóa thiết bị thành công',
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 module.exports = {
   getDevices,
+  getLockedDevices,
   login,
   logout,
   requestPasswordReset,
@@ -271,6 +317,7 @@ module.exports = {
   sendRegisterOtp,
   resetPassword,
   unlockAccount,
+  unlockDevice,
   verifyDeviceOtp,
   verifyRegisterOtp,
   verifyOtp,

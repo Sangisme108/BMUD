@@ -372,6 +372,46 @@ const run = async () => {
     } else {
       console.log('IP/device lockouts migration is already applied.');
     }
+
+    // Device-level lockout migration
+    const [[deviceLockoutsState]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM information_schema.tables
+       WHERE table_schema = DATABASE()
+         AND table_name = 'device_lockouts'`
+    );
+    if (Number(deviceLockoutsState.total) === 0) {
+      const deviceLockoutsPath = path.join(
+        __dirname,
+        '..',
+        '..',
+        'migrations',
+        '010_device_lockouts.sql'
+      );
+      const statements = fs
+        .readFileSync(deviceLockoutsPath, 'utf8')
+        .split(';')
+        .map((statement) => statement.trim())
+        .filter(Boolean);
+
+      for (const statement of statements) {
+        try {
+          await connection.query(statement);
+        } catch (error) {
+          if (
+            error.code === 'ER_DUP_KEYNAME' ||
+            error.code === 'ER_DUP_FIELDNAME' ||
+            error.code === 'ER_TABLE_EXISTS_ERROR'
+          ) {
+            continue;
+          }
+          throw error;
+        }
+      }
+      console.log('Device lockouts migration completed.');
+    } else {
+      console.log('Device lockouts migration is already applied.');
+    }
   } finally {
     await connection.end();
   }
