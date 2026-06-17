@@ -5,6 +5,11 @@ import '../services/auth_service.dart';
 import 'home_screen.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
+  static const _enableDebugOtp = bool.fromEnvironment(
+    'ENABLE_DEBUG_OTP',
+    defaultValue: false,
+  );
+
   final String email;
   final String deviceFingerprint;
   final String? debugOtp;
@@ -31,7 +36,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.debugOtp != null) {
+    if (OtpVerificationScreen._enableDebugOtp && widget.debugOtp != null) {
       _otpController.text = widget.debugOtp!;
     }
   }
@@ -84,7 +89,8 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                   'Nhập mã OTP gồm 6 chữ số đã gửi đến ${widget.email}.',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
-                if (widget.debugOtp != null) ...[
+                if (OtpVerificationScreen._enableDebugOtp &&
+                    widget.debugOtp != null) ...[
                   const SizedBox(height: 12),
                   Text(
                     'Chế độ phát triển: OTP ${widget.debugOtp}',

@@ -25,6 +25,7 @@ const IP_FAILURE_LIMIT = Number.parseInt(
   process.env.AUTH_IP_FAILURE_LIMIT || '25',
   10
 );
+const ENABLE_DEBUG_OTP = process.env.ENABLE_DEBUG_OTP === 'true';
 
 const sanitizeUser = (user) => ({
   id: user.id,
@@ -487,7 +488,7 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       risk_score: risk.riskScore,
       risk_level: risk.riskLevel,
       message: 'Yêu cầu xác thực OTP cho thiết bị mới',
-      ...(process.env.NODE_ENV !== 'production' && !emailSent
+      ...(ENABLE_DEBUG_OTP && !emailSent
         ? { debug_otp: challenge.otpCode }
         : {}),
     };
