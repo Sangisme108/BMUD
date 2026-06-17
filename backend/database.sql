@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name VARCHAR(120) NOT NULL,
   email VARCHAR(180) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  email_verified_at DATETIME NULL,
   message_recovery_code_hash VARCHAR(255) NULL,
   is_locked BOOLEAN NOT NULL DEFAULT FALSE,
   lock_until DATETIME NULL,
@@ -23,10 +24,15 @@ CREATE TABLE IF NOT EXISTS devices (
   device_fingerprint_hash VARCHAR(64) NULL,
   ip_address VARCHAR(64) NOT NULL,
   user_agent TEXT,
+  device_name VARCHAR(255) NULL,
+  device_type VARCHAR(50) NULL,
+  operating_system VARCHAR(255) NULL,
   is_trusted BOOLEAN NOT NULL DEFAULT FALSE,
   message_recovery_verified BOOLEAN NOT NULL DEFAULT FALSE,
   message_recovery_verified_at DATETIME NULL,
   last_used_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME NULL,
+  revoked_reason VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_devices_user
     FOREIGN KEY (user_id) REFERENCES users(id)
@@ -85,6 +91,8 @@ CREATE TABLE IF NOT EXISTS auth_otps (
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
+  session_id VARCHAR(64) NULL,
+  device_id_hash CHAR(64) NULL,
   token_hash VARCHAR(64) NOT NULL UNIQUE,
   expires_at DATETIME NOT NULL,
   revoked_at DATETIME NULL,
@@ -92,7 +100,35 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   CONSTRAINT fk_refresh_tokens_user
     FOREIGN KEY (user_id) REFERENCES users(id)
     ON DELETE CASCADE,
-  INDEX idx_refresh_tokens_user (user_id)
+  INDEX idx_refresh_tokens_user (user_id),
+  INDEX idx_refresh_tokens_session (session_id)
+);
+
+CREATE TABLE IF NOT EXISTS login_sessions (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  session_id VARCHAR(64) NOT NULL,
+  user_id INT NOT NULL,
+  device_id_hash CHAR(64) NOT NULL,
+  device_name VARCHAR(255) NULL,
+  device_type VARCHAR(50) NULL,
+  operating_system VARCHAR(255) NULL,
+  ip_address VARCHAR(45) NULL,
+  user_agent TEXT NULL,
+  refresh_token_hash CHAR(64) NOT NULL,
+  is_trusted BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME NOT NULL,
+  revoked_at DATETIME NULL,
+  revoked_reason VARCHAR(255) NULL,
+  CONSTRAINT fk_login_sessions_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE,
+  UNIQUE KEY uq_login_sessions_session_id (session_id),
+  INDEX idx_login_sessions_user_id (user_id),
+  INDEX idx_login_sessions_device (user_id, device_id_hash),
+  INDEX idx_login_sessions_active (user_id, is_active)
 );
 
 CREATE TABLE IF NOT EXISTS account_action_tokens (
@@ -167,6 +203,19 @@ CREATE TABLE IF NOT EXISTS messages (
     ON DELETE CASCADE,
   INDEX idx_messages_pair_time (sender_id, receiver_id, id),
   INDEX idx_messages_receiver_read (receiver_id, read_at, id)
+);
+
+CREATE TABLE IF NOT EXISTS email_otps (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  email VARCHAR(180) NOT NULL,
+  otp_hash VARCHAR(64) NOT NULL,
+  purpose ENUM('REGISTER', 'NEW_DEVICE_LOGIN', 'PASSWORD_RESET') NOT NULL,
+  expires_at DATETIME NOT NULL,
+  used_at DATETIME NULL,
+  attempt_count INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_email_otps_lookup (email, purpose, created_at),
+  INDEX idx_email_otps_expiry (expires_at)
 );
 
 CREATE TABLE IF NOT EXISTS message_recovery_attempts (

@@ -11,13 +11,15 @@ class OtpVerificationScreen extends StatefulWidget {
   );
 
   final String email;
-  final String deviceFingerprint;
+  final String challengeId;
+  final String? maskedEmail;
   final String? debugOtp;
 
   const OtpVerificationScreen({
     super.key,
     required this.email,
-    required this.deviceFingerprint,
+    required this.challengeId,
+    this.maskedEmail,
     this.debugOtp,
   });
 
@@ -49,10 +51,9 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     });
 
     try {
-      final result = await _authService.verifyOtp(
-        email: widget.email,
+      final result = await _authService.verifyDeviceOtp(
+        challengeId: widget.challengeId,
         otpCode: _otpController.text.trim(),
-        deviceFingerprint: widget.deviceFingerprint,
       );
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(
@@ -75,6 +76,8 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final target = widget.maskedEmail ?? widget.email;
+
     return Scaffold(
       appBar: AppBar(title: const Text('Xác thực thiết bị')),
       body: SafeArea(
@@ -86,7 +89,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'Nhập mã OTP gồm 6 chữ số đã gửi đến ${widget.email}.',
+                  'Nhập mã OTP gồm 6 chữ số đã gửi đến $target.',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 if (OtpVerificationScreen._enableDebugOtp &&

@@ -2,9 +2,18 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { detectLoginRisk } = require('./anomalyDetectionService');
-const { sendLoginAlertEmail, sendOtpEmail } = require('./emailService');
-const { createOtpChallenge, verifyOtpChallenge } = require('./otpService');
+const {
+  sendLoginAlertEmail,
+  sendRegistrationOtpEmail,
+} = require('./emailService');
+const { verifyOtpChallenge } = require('./otpService');
+const {
+  createNewDeviceLoginChallenge,
+} = require('./newDeviceLoginService');
 const { recordSecurityEvent } = require('./securityEventService');
+const {
+  hashDeviceId,
+} = require('./sessionService');
 const {
   createTokenPair,
   revokeRefreshToken,
@@ -25,12 +34,16 @@ const IP_FAILURE_LIMIT = Number.parseInt(
   process.env.AUTH_IP_FAILURE_LIMIT || '25',
   10
 );
-const ENABLE_DEBUG_OTP = process.env.ENABLE_DEBUG_OTP === 'true';
+const REGISTER_OTP_TTL_MS = 5 * 60 * 1000;
+const REGISTER_OTP_RESEND_SECONDS = 60;
+const REGISTER_OTP_MAX_ATTEMPTS = 5;
+const REGISTER_OTP_SEND_LIMIT = 5;
 
 const sanitizeUser = (user) => ({
   id: user.id,
   full_name: user.full_name,
   email: user.email,
+  email_verified_at: user.email_verified_at,
   created_at: user.created_at,
   updated_at: user.updated_at,
 });
@@ -52,6 +65,12 @@ const isLoopbackIp = (ipAddress) => {
 
 const hashDeviceFingerprint = (deviceFingerprint) =>
   crypto.createHash('sha256').update(String(deviceFingerprint)).digest('hex');
+
+const hashOtp = (otp) =>
+  crypto
+    .createHash('sha256')
+    .update(`${otp}:${process.env.OTP_SECRET || process.env.JWT_SECRET}`)
+    .digest('hex');
 
 const validateEmail = (email) => {
   if (!EMAIL_PATTERN.test(email)) {
@@ -78,8 +97,9 @@ const recordAttempt = async ({
   riskScore = 0,
   riskLevel = 'LOW',
   reason,
+  db = pool,
 }) => {
-  await pool.query(
+  await db.query(
     `INSERT INTO login_attempts
      (user_id, email, ip_address, user_agent, device_fingerprint,
       is_successful, failure_type, risk_score, risk_level, reason)
@@ -106,8 +126,9 @@ const recordLegacyHistory = async ({
   isSuccessful,
   riskLevel,
   reason,
+  db = pool,
 }) => {
-  await pool.query(
+  await db.query(
     `INSERT INTO login_history
      (user_id, ip_address, user_agent, device_name, login_status, risk_level, reason)
      VALUES (?, ?, ?, 'Thiết bị ứng dụng', ?, ?, ?)`,
@@ -216,25 +237,39 @@ const assertLoginAllowed = async ({ email, ipAddress }) => {
 
 const upsertTrustedDevice = async ({
   userId,
-  deviceFingerprint,
+  deviceId,
+  deviceName,
+  deviceType,
+  operatingSystem,
   ipAddress,
   userAgent,
+  db = pool,
 }) => {
-  await pool.query(
+  const deviceIdHash = hashDeviceId(deviceId);
+  await db.query(
     `INSERT INTO devices
-     (user_id, device_fingerprint, device_fingerprint_hash, ip_address,
-      user_agent, is_trusted, message_recovery_verified, last_used_at)
-     VALUES (?, ?, ?, ?, ?, TRUE, FALSE, NOW())
+     (user_id, device_fingerprint, device_fingerprint_hash, device_name,
+      device_type, operating_system, ip_address, user_agent, is_trusted,
+      message_recovery_verified, revoked_at, revoked_reason, last_used_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE, FALSE, NULL, NULL, NOW())
      ON DUPLICATE KEY UPDATE
        device_fingerprint_hash = VALUES(device_fingerprint_hash),
+       device_name = COALESCE(VALUES(device_name), device_name),
+       device_type = COALESCE(VALUES(device_type), device_type),
+       operating_system = COALESCE(VALUES(operating_system), operating_system),
        ip_address = VALUES(ip_address),
        user_agent = VALUES(user_agent),
        is_trusted = TRUE,
+       revoked_at = NULL,
+       revoked_reason = NULL,
        last_used_at = NOW()`,
     [
       userId,
-      deviceFingerprint,
-      hashDeviceFingerprint(deviceFingerprint),
+      deviceIdHash,
+      deviceIdHash,
+      deviceName || null,
+      deviceType || null,
+      operatingSystem || null,
       ipAddress,
       userAgent,
     ]
@@ -246,16 +281,24 @@ const completeLogin = async ({
   email,
   ipAddress,
   userAgent,
-  deviceFingerprint,
+  deviceId,
+  deviceName,
+  deviceType,
+  operatingSystem,
   riskScore,
   riskLevel,
   reason,
+  db = pool,
 }) => {
   await upsertTrustedDevice({
     userId: user.id,
-    deviceFingerprint,
+    deviceId,
+    deviceName,
+    deviceType,
+    operatingSystem,
     ipAddress,
     userAgent,
+    db,
   });
 
   await recordAttempt({
@@ -263,11 +306,12 @@ const completeLogin = async ({
     email,
     ipAddress,
     userAgent,
-    deviceFingerprint,
+    deviceFingerprint: hashDeviceId(deviceId),
     isSuccessful: true,
     riskScore,
     riskLevel,
     reason,
+    db,
   });
 
   await recordLegacyHistory({
@@ -277,15 +321,16 @@ const completeLogin = async ({
     isSuccessful: true,
     riskLevel,
     reason,
+    db,
   });
 
-  await pool.query(
+  await db.query(
     `UPDATE login_attempts
      SET is_resolved = TRUE
      WHERE email = ? AND failure_type = 'INVALID_CREDENTIALS'`,
     [email]
   );
-  await pool.query(
+  await db.query(
     'UPDATE users SET is_locked = FALSE, lock_until = NULL WHERE id = ?',
     [user.id]
   );
@@ -296,13 +341,31 @@ const completeLogin = async ({
     description: reason,
     ipAddress,
     userAgent,
-    deviceFingerprint,
+    deviceFingerprintHash: hashDeviceId(deviceId),
     riskLevel,
     metadata: { risk_score: riskScore },
+    db,
   });
 
+  const tokens = await createTokenPair(
+    user,
+    {
+      deviceId,
+      deviceName,
+      deviceType,
+      operatingSystem,
+      ipAddress,
+      userAgent,
+      isTrusted: true,
+    },
+    db
+  );
+
   return {
-    ...(await createTokenPair(user)),
+    success: true,
+    requiresOtp: false,
+    requires_otp: false,
+    ...tokens,
     user: sanitizeUser(user),
     risk_score: riskScore,
     risk_level: riskLevel,
@@ -343,10 +406,281 @@ const register = async ({ full_name, email, password }) => {
   return sanitizeUser(user);
 };
 
-const login = async ({ email, password, deviceFingerprint, req }) => {
+const requestRegistrationOtp = async ({ fullName, email }) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedName = String(fullName || '').trim();
+  if (!normalizedName) {
+    throw createHttpError('Vui long nhap ho ten', 400);
+  }
+  validateEmail(normalizedEmail);
+
+  const [existing] = await pool.query(
+    'SELECT id FROM users WHERE email = ?',
+    [normalizedEmail]
+  );
+  if (existing.length > 0) {
+    throw createHttpError('Email da duoc su dung', 409);
+  }
+
+  const [[recent]] = await pool.query(
+    `SELECT created_at
+     FROM email_otps
+     WHERE email = ? AND purpose = 'REGISTER'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [normalizedEmail]
+  );
+  if (
+    recent?.created_at &&
+    Date.now() - new Date(recent.created_at).getTime() <
+      REGISTER_OTP_RESEND_SECONDS * 1000
+  ) {
+    throw createHttpError(
+      `Vui long doi ${REGISTER_OTP_RESEND_SECONDS} giay truoc khi gui lai ma`,
+      429
+    );
+  }
+
+  const [[sendStats]] = await pool.query(
+    `SELECT COUNT(*) AS total
+     FROM email_otps
+     WHERE email = ?
+       AND purpose = 'REGISTER'
+       AND created_at >= (NOW() - INTERVAL 15 MINUTE)`,
+    [normalizedEmail]
+  );
+  if (Number(sendStats.total || 0) >= REGISTER_OTP_SEND_LIMIT) {
+    throw createHttpError('Ban da gui OTP qua nhieu lan. Vui long thu lai sau.', 429);
+  }
+
+  const otpCode = crypto.randomInt(100000, 1000000).toString();
+  await pool.query(
+    `UPDATE email_otps
+     SET used_at = NOW()
+     WHERE email = ?
+       AND purpose = 'REGISTER'
+       AND used_at IS NULL`,
+    [normalizedEmail]
+  );
+  await pool.query(
+    `INSERT INTO email_otps (email, otp_hash, purpose, expires_at)
+     VALUES (?, ?, 'REGISTER', ?)`,
+    [
+      normalizedEmail,
+      hashOtp(otpCode),
+      new Date(Date.now() + REGISTER_OTP_TTL_MS),
+    ]
+  );
+
+  try {
+    await sendRegistrationOtpEmail({
+      fullName: normalizedName,
+      email: normalizedEmail,
+      otpCode,
+      expiresInMinutes: REGISTER_OTP_TTL_MS / 60000,
+    });
+  } catch (error) {
+    throw createHttpError(
+      'Khong the gui ma OTP luc nay. Vui long thu lai sau.',
+      error.statusCode || 503
+    );
+  }
+
+  return {
+    success: true,
+    message: 'Ma OTP da duoc gui den email',
+    expiresIn: REGISTER_OTP_TTL_MS / 1000,
+  };
+};
+
+const verifyRegistrationOtp = async ({
+  fullName,
+  email,
+  password,
+  confirmPassword,
+  otp,
+  deviceFingerprint,
+  req,
+}) => {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedName = String(fullName || '').trim();
+  if (!normalizedName || !normalizedEmail || !password || !confirmPassword || !otp) {
+    throw createHttpError('Vui long nhap day du thong tin dang ky', 400);
+  }
+  validateEmail(normalizedEmail);
+  if (password.length < 8) {
+    throw createHttpError('Mat khau phai co it nhat 8 ky tu', 400);
+  }
+  if (password !== confirmPassword) {
+    throw createHttpError('Xac nhan mat khau khong khop', 400);
+  }
+  if (!/^\d{6}$/.test(String(otp))) {
+    throw createHttpError('OTP phai gom dung 6 chu so', 400);
+  }
+  if (!deviceFingerprint) {
+    throw createHttpError('Thong tin thiet bi khong hop le', 400);
+  }
+
+  const context = getRequestContext(req, hashDeviceId(deviceFingerprint));
+  const connection = await pool.getConnection();
+  let committed = false;
+  try {
+    await connection.beginTransaction();
+
+    const [[existingUser]] = await connection.query(
+      'SELECT id FROM users WHERE email = ? FOR UPDATE',
+      [normalizedEmail]
+    );
+    if (existingUser) {
+      throw createHttpError('Email da duoc su dung', 409);
+    }
+
+    const [[challenge]] = await connection.query(
+      `SELECT id, otp_hash, expires_at, used_at, attempt_count
+       FROM email_otps
+       WHERE email = ?
+         AND purpose = 'REGISTER'
+       ORDER BY created_at DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [normalizedEmail]
+    );
+
+    if (!challenge || challenge.used_at) {
+      throw createHttpError('Ma OTP khong ton tai hoac da duoc su dung', 400);
+    }
+    if (new Date(challenge.expires_at) <= new Date()) {
+      await connection.query(
+        'UPDATE email_otps SET used_at = NOW() WHERE id = ?',
+        [challenge.id]
+      );
+      await connection.commit();
+      committed = true;
+      throw createHttpError('Ma OTP da het han. Vui long gui lai ma moi.', 410);
+    }
+    if (challenge.attempt_count >= REGISTER_OTP_MAX_ATTEMPTS) {
+      throw createHttpError('Ban da nhap sai OTP qua so lan cho phep', 429);
+    }
+    if (hashOtp(otp) !== challenge.otp_hash) {
+      await connection.query(
+        'UPDATE email_otps SET attempt_count = attempt_count + 1 WHERE id = ?',
+        [challenge.id]
+      );
+      await connection.commit();
+      committed = true;
+      throw createHttpError('Ma OTP khong chinh xac', 400);
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const [result] = await connection.query(
+      `INSERT INTO users (full_name, email, password_hash, email_verified_at)
+       VALUES (?, ?, ?, NOW())`,
+      [normalizedName, normalizedEmail, passwordHash]
+    );
+    const userId = result.insertId;
+    if (!userId) {
+      throw createHttpError('Khong lay duoc ID cua tai khoan vua tao', 500);
+    }
+    await connection.query(
+      'UPDATE email_otps SET used_at = NOW() WHERE id = ?',
+      [challenge.id]
+    );
+
+    const [[user]] = await connection.query(
+      `SELECT id, full_name, email, email_verified_at, created_at, updated_at
+       FROM users WHERE id = ?`,
+      [userId]
+    );
+    if (!user?.id) {
+      throw createHttpError('Khong tim thay tai khoan vua tao', 500);
+    }
+
+    await upsertTrustedDevice({
+      userId: user.id,
+      deviceId: deviceFingerprint,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      db: connection,
+    });
+    await recordAttempt({
+      userId: user.id,
+      email: normalizedEmail,
+      ...context,
+      isSuccessful: true,
+      riskScore: 0,
+      riskLevel: 'LOW',
+      reason: 'Dang ky va xac minh email thanh cong',
+      db: connection,
+    });
+    await recordLegacyHistory({
+      userId: user.id,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      isSuccessful: true,
+      riskLevel: 'LOW',
+      reason: 'Dang ky va xac minh email thanh cong',
+      db: connection,
+    });
+    await recordSecurityEvent({
+      userId: user.id,
+      eventType: 'REGISTER_VERIFIED',
+      title: 'Dang ky va xac minh email thanh cong',
+      description: 'Tai khoan da duoc tao sau khi xac minh OTP email.',
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+      deviceFingerprint,
+      riskLevel: 'LOW',
+      db: connection,
+    });
+
+    const tokens = await createTokenPair(
+      user,
+      {
+        deviceId: deviceFingerprint,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent,
+        isTrusted: true,
+      },
+      connection
+    );
+    await connection.commit();
+    committed = true;
+
+    return {
+      success: true,
+      message: 'Dang ky va xac minh email thanh cong',
+      ...tokens,
+      user: sanitizeUser(user),
+      requires_otp: false,
+      is_trusted_device: true,
+    };
+  } catch (error) {
+    if (!committed) {
+      await connection.rollback();
+    }
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
+const login = async ({
+  email,
+  password,
+  deviceId,
+  deviceName,
+  deviceType,
+  operatingSystem,
+  req,
+}) => {
   const normalizedEmail = normalizeEmail(email);
   validateEmail(normalizedEmail);
-  const context = getRequestContext(req, deviceFingerprint);
+  if (!deviceId) {
+    throw createHttpError('Thiếu thông tin thiết bị', 400);
+  }
+
+  const deviceIdHash = hashDeviceId(deviceId);
+  const context = getRequestContext(req, deviceIdHash);
   await assertLoginAllowed({
     email: normalizedEmail,
     ipAddress: context.ipAddress,
@@ -378,7 +712,7 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       description: 'Sai email hoac mat khau.',
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
-      deviceFingerprint,
+      deviceFingerprintHash: deviceIdHash,
       riskLevel: 'MEDIUM',
       metadata: { email: normalizedEmail },
     });
@@ -389,6 +723,7 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
     userId: user.id,
     email: normalizedEmail,
     ...context,
+    deviceFingerprint: deviceIdHash,
   });
 
   if (risk.riskLevel === 'HIGH') {
@@ -416,14 +751,14 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       description: risk.reason,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
-      deviceFingerprint,
+      deviceFingerprintHash: deviceIdHash,
       riskLevel: 'HIGH',
       metadata: { risk_score: risk.riskScore },
     });
     sendLoginAlertEmail({
       user: sanitizeUser(user),
       ipAddress: context.ipAddress,
-      deviceName: 'Thiết bị chưa xác minh',
+      deviceName: deviceName || 'Thiết bị chưa xác minh',
       riskLevel: risk.riskLevel,
       reason: risk.reason,
       loginTime: new Date().toLocaleString('vi-VN'),
@@ -434,11 +769,27 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
     );
   }
 
-  if (risk.riskLevel === 'MEDIUM') {
-    const challenge = await createOtpChallenge({
+  const [[device]] = await pool.query(
+    `SELECT id, is_trusted, revoked_at
+     FROM devices
+     WHERE user_id = ?
+       AND device_fingerprint = ?
+     LIMIT 1`,
+    [user.id, deviceIdHash]
+  );
+
+  const needsDeviceOtp =
+    !device || !device.is_trusted || device.revoked_at != null;
+
+  if (needsDeviceOtp) {
+    const challenge = await createNewDeviceLoginChallenge({
       user,
-      ...context,
-      ...risk,
+      deviceId,
+      deviceName,
+      deviceType,
+      operatingSystem,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
     });
     await recordAttempt({
       userId: user.id,
@@ -447,50 +798,34 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
       isSuccessful: false,
       failureType: 'OTP_REQUIRED',
       riskScore: risk.riskScore,
-      riskLevel: risk.riskLevel,
-      reason: risk.reason,
+      riskLevel: 'MEDIUM',
+      reason: 'Thiet bi moi hoac da bi go can xac minh OTP',
     });
     await recordSecurityEvent({
       userId: user.id,
       eventType: 'OTP_REQUIRED',
       title: 'Yeu cau OTP cho thiet bi moi',
-      description: risk.reason,
+      description: 'Thiet bi moi hoac da bi go can xac minh OTP qua email.',
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
-      deviceFingerprint,
-      riskLevel: risk.riskLevel,
-      metadata: { risk_score: risk.riskScore },
+      deviceFingerprintHash: deviceIdHash,
+      riskLevel: 'MEDIUM',
     });
-    let emailSent = false;
-    try {
-      emailSent = await sendOtpEmail({
-        user: sanitizeUser(user),
-        otpCode: challenge.otpCode,
-        riskLevel: risk.riskLevel,
-        reason: risk.reason,
-        expiresInMinutes: 5,
-      });
-    } catch (error) {
-      console.error('Không thể gửi email OTP:', error.message);
-      if (false && process.env.NODE_ENV === 'production') {
-        throw createHttpError(
-          'Không thể gửi mã OTP lúc này. Vui lòng thử lại sau.',
-          503
-        );
-      }
-    }
 
     return {
       statusCode: 202,
+      success: true,
+      requiresOtp: true,
       requires_otp: true,
-      challenge_id: challenge.challengeId,
-      expires_in: challenge.expiresIn,
-      risk_score: risk.riskScore,
-      risk_level: risk.riskLevel,
-      message: 'Yêu cầu xác thực OTP cho thiết bị mới',
-      ...(ENABLE_DEBUG_OTP && !emailSent
-        ? { debug_otp: challenge.otpCode }
-        : {}),
+      message: 'Thiết bị mới cần xác minh OTP',
+      data: {
+        challengeId: challenge.challengeId,
+        challenge_id: challenge.challengeId,
+        maskedEmail: challenge.maskedEmail,
+        expiresIn: challenge.expiresIn,
+        expires_in: challenge.expiresIn,
+      },
+      ...(challenge.otpCode ? { debug_otp: challenge.otpCode } : {}),
     };
   }
 
@@ -498,8 +833,114 @@ const login = async ({ email, password, deviceFingerprint, req }) => {
     user,
     email: normalizedEmail,
     ...context,
-    ...risk,
+    deviceId,
+    deviceName,
+    deviceType,
+    operatingSystem,
+    riskScore: risk.riskScore,
+    riskLevel: risk.riskLevel,
+    reason: risk.reason,
   });
+};
+
+const verifyDeviceOtp = async ({
+  challengeId,
+  otp,
+  deviceId,
+  deviceName,
+  deviceType,
+  operatingSystem,
+}) => {
+  if (!challengeId || !otp || !deviceId) {
+    throw createHttpError('Thieu thong tin xac minh OTP', 400);
+  }
+  if (!/^\d{6}$/.test(String(otp))) {
+    throw createHttpError('OTP phai gom dung 6 chu so', 400);
+  }
+
+  const deviceIdHash = hashDeviceId(deviceId);
+  const connection = await pool.getConnection();
+  let committed = false;
+
+  try {
+    await connection.beginTransaction();
+    const [[challenge]] = await connection.query(
+      `SELECT *
+       FROM email_otps
+       WHERE challenge_id = ?
+         AND purpose = 'NEW_DEVICE_LOGIN'
+       LIMIT 1
+       FOR UPDATE`,
+      [challengeId]
+    );
+
+    if (!challenge || challenge.used_at) {
+      throw createHttpError('Ma OTP khong ton tai hoac da duoc su dung', 400);
+    }
+    if (challenge.device_id_hash !== deviceIdHash) {
+      throw createHttpError('Thiet bi khong khop voi yeu cau xac minh', 403);
+    }
+    if (new Date(challenge.expires_at) <= new Date()) {
+      await connection.query(
+        'UPDATE email_otps SET used_at = NOW() WHERE id = ?',
+        [challenge.id]
+      );
+      await connection.commit();
+      committed = true;
+      throw createHttpError('Ma OTP da het han. Vui long dang nhap lai.', 410);
+    }
+    if (challenge.attempt_count >= REGISTER_OTP_MAX_ATTEMPTS) {
+      throw createHttpError('Ban da nhap sai OTP qua so lan cho phep', 429);
+    }
+    if (hashOtp(otp) !== challenge.otp_hash) {
+      await connection.query(
+        'UPDATE email_otps SET attempt_count = attempt_count + 1 WHERE id = ?',
+        [challenge.id]
+      );
+      await connection.commit();
+      committed = true;
+      throw createHttpError('Ma OTP khong chinh xac', 400);
+    }
+
+    await connection.query(
+      'UPDATE email_otps SET used_at = NOW() WHERE id = ?',
+      [challenge.id]
+    );
+
+    const [[user]] = await connection.query(
+      'SELECT * FROM users WHERE id = ?',
+      [challenge.user_id]
+    );
+    if (!user) {
+      throw createHttpError('Tai khoan khong ton tai', 404);
+    }
+
+    const result = await completeLogin({
+      user,
+      email: user.email,
+      ipAddress: challenge.ip_address,
+      userAgent: challenge.user_agent || 'Unknown',
+      deviceId,
+      deviceName: deviceName || challenge.device_name,
+      deviceType: deviceType || challenge.device_type,
+      operatingSystem: operatingSystem || challenge.operating_system,
+      riskScore: 0,
+      riskLevel: 'LOW',
+      reason: 'Xac minh OTP thiet bi moi thanh cong',
+      db: connection,
+    });
+
+    await connection.commit();
+    committed = true;
+    return result;
+  } catch (error) {
+    if (!committed) {
+      await connection.rollback();
+    }
+    throw error;
+  } finally {
+    connection.release();
+  }
 };
 
 const verifyOtp = async ({ email, otpCode, deviceFingerprint }) => {
@@ -509,7 +950,7 @@ const verifyOtp = async ({ email, otpCode, deviceFingerprint }) => {
   const challenge = await verifyOtpChallenge({
     email: normalizedEmail,
     otpCode,
-    deviceFingerprint,
+    deviceFingerprint: hashDeviceId(deviceFingerprint),
   });
   const [[user]] = await pool.query(
     'SELECT * FROM users WHERE id = ?',
@@ -524,18 +965,21 @@ const verifyOtp = async ({ email, otpCode, deviceFingerprint }) => {
     email: normalizedEmail,
     ipAddress: challenge.ip_address,
     userAgent: challenge.user_agent || 'Unknown',
-    deviceFingerprint: challenge.device_fingerprint,
+    deviceId: deviceFingerprint,
     riskScore: challenge.risk_score,
     riskLevel: challenge.risk_level,
     reason: `${challenge.reason}; OTP hợp lệ, thiết bị đã được tin cậy`,
   });
 };
 
-const refresh = async ({ refreshToken }) => {
+const refresh = async ({ refreshToken, deviceId }) => {
   if (!refreshToken) {
     throw createHttpError('Thiếu refresh token', 400);
   }
-  return rotateRefreshToken(refreshToken);
+  if (!deviceId) {
+    throw createHttpError('Thiếu thông tin thiết bị', 400);
+  }
+  return rotateRefreshToken(refreshToken, deviceId);
 };
 
 const logout = async ({ refreshToken }) => {
@@ -556,5 +1000,8 @@ module.exports = {
   logout,
   refresh,
   register,
+  requestRegistrationOtp,
+  verifyDeviceOtp,
+  verifyRegistrationOtp,
   verifyOtp,
 };

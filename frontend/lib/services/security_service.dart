@@ -1,18 +1,16 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-import '../config/api_config.dart';
 import '../models/login_history.dart';
+import 'api_client.dart';
 import 'auth_service.dart';
 
 class SecurityService {
-  static const _requestTimeout = Duration(seconds: 15);
-  final AuthService _authService = AuthService();
+  final ApiClient _apiClient = ApiClient();
 
   Future<List<LoginHistory>> getLoginHistory() async {
-    final response = await _authorizedGet('/security/login-history');
+    final response = await _apiClient.get('/security/login-history');
     final data = _decode(response);
     if (response.statusCode >= 400) {
       throw ApiException(
@@ -28,7 +26,7 @@ class SecurityService {
   }
 
   Future<Map<String, dynamic>> getDashboard() async {
-    final response = await _authorizedGet('/security/dashboard');
+    final response = await _apiClient.get('/security/dashboard');
     final data = _decode(response);
     if (response.statusCode >= 400) {
       throw ApiException(
@@ -40,7 +38,7 @@ class SecurityService {
   }
 
   Future<List<Map<String, dynamic>>> getDevices() async {
-    final response = await _authorizedGet('/security/devices');
+    final response = await _apiClient.get('/auth/devices');
     final data = _decode(response);
     if (response.statusCode >= 400) {
       throw ApiException(
@@ -54,7 +52,7 @@ class SecurityService {
   }
 
   Future<List<Map<String, dynamic>>> getSecurityEvents() async {
-    final response = await _authorizedGet('/security/events');
+    final response = await _apiClient.get('/security/events');
     final data = _decode(response);
     if (response.statusCode >= 400) {
       throw ApiException(
@@ -67,8 +65,9 @@ class SecurityService {
         .toList();
   }
 
-  Future<String> revokeDevice(int id) async {
-    final response = await _authorizedDelete('/security/devices/$id');
+  Future<Map<String, dynamic>> revokeDevice(String sessionId) async {
+    final response =
+        await _apiClient.delete('/auth/devices/$sessionId');
     final data = _decode(response);
     if (response.statusCode >= 400) {
       throw ApiException(
@@ -76,69 +75,7 @@ class SecurityService {
         statusCode: response.statusCode,
       );
     }
-    return data['message']?.toString() ?? 'Đã gỡ thiết bị tin cậy';
-  }
-
-  Future<http.Response> _authorizedGet(String path) async {
-    try {
-      var response = await http
-          .get(
-            Uri.parse('${ApiConfig.baseUrl}$path'),
-            headers: await _headers(),
-          )
-          .timeout(_requestTimeout);
-
-      if (response.statusCode == 401 && await _authService.refreshSession()) {
-        response = await http
-            .get(
-              Uri.parse('${ApiConfig.baseUrl}$path'),
-              headers: await _headers(),
-            )
-            .timeout(_requestTimeout);
-      }
-      return response;
-    } on TimeoutException {
-      throw const ApiException('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
-    } on ApiException {
-      rethrow;
-    } on Exception catch (error) {
-      throw ApiException('Không thể kết nối máy chủ: $error');
-    }
-  }
-
-  Future<http.Response> _authorizedDelete(String path) async {
-    try {
-      var response = await http
-          .delete(
-            Uri.parse('${ApiConfig.baseUrl}$path'),
-            headers: await _headers(),
-          )
-          .timeout(_requestTimeout);
-
-      if (response.statusCode == 401 && await _authService.refreshSession()) {
-        response = await http
-            .delete(
-              Uri.parse('${ApiConfig.baseUrl}$path'),
-              headers: await _headers(),
-            )
-            .timeout(_requestTimeout);
-      }
-      return response;
-    } on TimeoutException {
-      throw const ApiException('Máy chủ phản hồi quá lâu. Vui lòng thử lại.');
-    } on ApiException {
-      rethrow;
-    } on Exception catch (error) {
-      throw ApiException('Không thể kết nối máy chủ: $error');
-    }
-  }
-
-  Future<Map<String, String>> _headers() async {
-    final token = await _authService.getToken();
-    return {
-      'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
-    };
+    return data;
   }
 
   Map<String, dynamic> _decode(http.Response response) {

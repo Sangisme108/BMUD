@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
+import 'services/session_manager.dart';
 
 void main() {
   runApp(const SecurityLoginApp());
@@ -16,6 +17,7 @@ class SecurityLoginApp extends StatelessWidget {
     const messengerBlue = Color(0xFF1877F2);
 
     return MaterialApp(
+      navigatorKey: SessionManager.navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'BMUD Messenger',
       theme: ThemeData(

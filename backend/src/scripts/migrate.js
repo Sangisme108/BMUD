@@ -228,6 +228,115 @@ const run = async () => {
     } else {
       console.log('Security events migration is already applied.');
     }
+
+    const [[registrationOtpState]] = await connection.query(
+      `SELECT
+         (
+           SELECT COUNT(*)
+           FROM information_schema.columns
+           WHERE table_schema = DATABASE()
+             AND table_name = 'users'
+             AND column_name = 'email_verified_at'
+         ) AS email_verified_column_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.tables
+           WHERE table_schema = DATABASE()
+             AND table_name = 'email_otps'
+         ) AS email_otps_table_ready`
+    );
+    if (Number(registrationOtpState.email_verified_column_ready) === 0) {
+      await connection.query(
+        `ALTER TABLE users
+         ADD COLUMN email_verified_at DATETIME NULL AFTER password_hash`
+      );
+    }
+    if (Number(registrationOtpState.email_otps_table_ready) === 0) {
+      const registrationOtpPath = path.join(
+        __dirname,
+        '..',
+        '..',
+        'migrations',
+        '007_registration_email_otp.sql'
+      );
+      const registrationOtpSql = fs
+        .readFileSync(registrationOtpPath, 'utf8')
+        .replace(
+          /ALTER TABLE users\s+ADD COLUMN email_verified_at DATETIME NULL AFTER password_hash;\s*/i,
+          ''
+        );
+      await connection.query(registrationOtpSql);
+    }
+    if (
+      Number(registrationOtpState.email_verified_column_ready) === 0 ||
+      Number(registrationOtpState.email_otps_table_ready) === 0
+    ) {
+      console.log('Registration email OTP migration completed.');
+    } else {
+      console.log('Registration email OTP migration is already applied.');
+    }
+
+    const [[loginSessionsState]] = await connection.query(
+      `SELECT
+         (
+           SELECT COUNT(*)
+           FROM information_schema.tables
+           WHERE table_schema = DATABASE()
+             AND table_name = 'login_sessions'
+         ) AS login_sessions_table_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.columns
+           WHERE table_schema = DATABASE()
+             AND table_name = 'devices'
+             AND column_name = 'revoked_at'
+         ) AS devices_revoked_at_ready,
+         (
+           SELECT COUNT(*)
+           FROM information_schema.columns
+           WHERE table_schema = DATABASE()
+             AND table_name = 'refresh_tokens'
+             AND column_name = 'session_id'
+         ) AS refresh_tokens_session_id_ready`
+    );
+
+    const loginSessionsReady =
+      Number(loginSessionsState.login_sessions_table_ready) > 0 &&
+      Number(loginSessionsState.devices_revoked_at_ready) > 0 &&
+      Number(loginSessionsState.refresh_tokens_session_id_ready) > 0;
+
+    if (!loginSessionsReady) {
+      const loginSessionsPath = path.join(
+        __dirname,
+        '..',
+        '..',
+        'migrations',
+        '008_login_sessions.sql'
+      );
+      const statements = fs
+        .readFileSync(loginSessionsPath, 'utf8')
+        .split(';')
+        .map((statement) => statement.trim())
+        .filter(Boolean);
+
+      for (const statement of statements) {
+        try {
+          await connection.query(statement);
+        } catch (error) {
+          if (
+            error.code === 'ER_DUP_FIELDNAME' ||
+            error.code === 'ER_TABLE_EXISTS_ERROR' ||
+            error.code === 'ER_DUP_KEYNAME'
+          ) {
+            continue;
+          }
+          throw error;
+        }
+      }
+      console.log('Login sessions migration completed.');
+    } else {
+      console.log('Login sessions migration is already applied.');
+    }
   } finally {
     await connection.end();
   }

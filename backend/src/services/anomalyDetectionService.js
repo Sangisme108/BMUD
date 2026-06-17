@@ -17,16 +17,16 @@ const detectLoginRisk = async ({
   const reasons = [];
 
   const [[device]] = await pool.query(
-    `SELECT id, is_trusted
+    `SELECT id, is_trusted, revoked_at
      FROM devices
      WHERE user_id = ? AND device_fingerprint = ?
      LIMIT 1`,
     [userId, deviceFingerprint]
   );
 
-  if (!device || !device.is_trusted) {
+  if (!device || !device.is_trusted || device.revoked_at) {
     score += 30;
-    reasons.push('Thiết bị mới hoặc chưa được tin cậy');
+    reasons.push('Thiết bị mới, chưa được tin cậy hoặc đã bị gỡ');
   }
 
   const [[lastSuccess]] = await pool.query(

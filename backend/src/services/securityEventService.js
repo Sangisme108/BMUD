@@ -26,10 +26,11 @@ const recordSecurityEvent = async ({
   deviceFingerprintHash = null,
   riskLevel = 'LOW',
   metadata = null,
+  db = pool,
 }) => {
   if (!eventType || !title) return;
   try {
-    await pool.query(
+    await db.query(
       `INSERT INTO security_events
        (user_id, event_type, title, description, ip_address, user_agent,
         device_fingerprint_hash, risk_level, metadata)
