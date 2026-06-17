@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "migrate": "node src/scripts/migrate.js"
+    "migrate": "node src/scripts/migrate.js",
+    "test:devices": "node src/scripts/testDeviceSessions.js"
   },
   "keywords": [
     "nodejs",

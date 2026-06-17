@@ -1,5 +1,17 @@
 const authService = require('../services/authService');
 const accountRecoveryService = require('../services/accountRecoveryService');
+const deviceManagementService = require('../services/deviceManagementService');
+
+const parseDevicePayload = (body = {}) => ({
+  deviceId:
+    body.deviceId ||
+    body.device_id ||
+    body.deviceFingerprint ||
+    body.device_fingerprint,
+  deviceName: body.deviceName || body.device_name,
+  deviceType: body.deviceType || body.device_type,
+  operatingSystem: body.operatingSystem || body.operating_system,
+});
 
 const register = async (req, res, next) => {
   try {
@@ -18,22 +30,56 @@ const register = async (req, res, next) => {
   }
 };
 
+const sendRegisterOtp = async (req, res, next) => {
+  try {
+    const fullName = req.body.fullName || req.body.full_name;
+    const { email } = req.body;
+    const result = await authService.requestRegistrationOtp({
+      fullName,
+      email,
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const verifyRegisterOtp = async (req, res, next) => {
+  try {
+    const fullName = req.body.fullName || req.body.full_name;
+    const confirmPassword = req.body.confirmPassword || req.body.confirm_password;
+    const otp = req.body.otp || req.body.otp_code;
+    const { deviceId } = parseDevicePayload(req.body);
+    const result = await authService.verifyRegistrationOtp({
+      fullName,
+      email: req.body.email,
+      password: req.body.password,
+      confirmPassword,
+      otp,
+      deviceFingerprint: deviceId,
+      req,
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    return next(error);
+  }
+};
+
 const login = async (req, res, next) => {
   try {
-    const { email, password, device_fingerprint } = req.body;
-    if (!email || !password || !device_fingerprint) {
+    const { email, password } = req.body;
+    const device = parseDevicePayload(req.body);
+    if (!email || !password || !device.deviceId) {
       return res.status(400).json({
+        success: false,
         message: 'Vui lòng nhập email, mật khẩu và thông tin thiết bị',
       });
-    }
-    if (!/^[a-f0-9]{64}$/i.test(device_fingerprint)) {
-      return res.status(400).json({ message: 'Device fingerprint không hợp lệ' });
     }
 
     const result = await authService.login({
       email,
       password,
-      deviceFingerprint: device_fingerprint,
+      ...device,
       req,
     });
     return res.status(result.statusCode || 200).json(result);
@@ -42,10 +88,38 @@ const login = async (req, res, next) => {
   }
 };
 
+const verifyDeviceOtp = async (req, res, next) => {
+  try {
+    const otp = req.body.otp || req.body.otp_code;
+    const challengeId = req.body.challengeId || req.body.challenge_id;
+    const device = parseDevicePayload(req.body);
+    if (!challengeId || !otp || !device.deviceId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Thiếu thông tin xác minh OTP thiết bị',
+      });
+    }
+    if (!/^\d{6}$/.test(String(otp))) {
+      return res.status(400).json({ message: 'OTP phải gồm 6 chữ số' });
+    }
+
+    const result = await authService.verifyDeviceOtp({
+      challengeId,
+      otp,
+      ...device,
+      req,
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+};
+
 const verifyOtp = async (req, res, next) => {
   try {
-    const { email, otp_code, device_fingerprint } = req.body;
-    if (!email || !otp_code || !device_fingerprint) {
+    const { email, otp_code } = req.body;
+    const { deviceId } = parseDevicePayload(req.body);
+    if (!email || !otp_code || !deviceId) {
       return res.status(400).json({ message: 'Thiếu thông tin xác thực OTP' });
     }
     if (!/^\d{6}$/.test(otp_code)) {
@@ -55,7 +129,7 @@ const verifyOtp = async (req, res, next) => {
     const result = await authService.verifyOtp({
       email,
       otpCode: otp_code,
-      deviceFingerprint: device_fingerprint,
+      deviceFingerprint: deviceId,
     });
     return res.json(result);
   } catch (error) {
@@ -65,10 +139,12 @@ const verifyOtp = async (req, res, next) => {
 
 const refresh = async (req, res, next) => {
   try {
+    const { deviceId } = parseDevicePayload(req.body);
     const result = await authService.refresh({
       refreshToken: req.body.refresh_token,
+      deviceId,
     });
-    return res.json(result);
+    return res.json({ success: true, data: result, ...result });
   } catch (error) {
     return next(error);
   }
@@ -78,6 +154,35 @@ const logout = async (req, res, next) => {
   try {
     const result = await authService.logout({
       refreshToken: req.body.refresh_token,
+    });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const getDevices = async (req, res, next) => {
+  try {
+    const devices = await deviceManagementService.listDevices(
+      req.user.id,
+      req.sessionId || null
+    );
+    return res.json({ success: true, data: devices });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const revokeDevice = async (req, res, next) => {
+  try {
+    const sessionId = deviceManagementService.resolveDeviceRecordId(
+      req.params.deviceRecordId || req.params.id
+    );
+    req.sessionId = req.sessionId || null;
+    const result = await deviceManagementService.revokeDevice({
+      userId: req.user.id,
+      sessionId,
+      req,
     });
     return res.json(result);
   } catch (error) {
@@ -155,13 +260,18 @@ const unlockAccount = async (req, res, next) => {
 };
 
 module.exports = {
+  getDevices,
   login,
   logout,
   requestPasswordReset,
   requestUnlock,
   refresh,
   register,
+  revokeDevice,
+  sendRegisterOtp,
   resetPassword,
   unlockAccount,
+  verifyDeviceOtp,
+  verifyRegisterOtp,
   verifyOtp,
 };

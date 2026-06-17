@@ -14,7 +14,10 @@ const readTimeout = (name, fallback) => {
 };
 
 const getEmailFrom = () =>
-  process.env.EMAIL_FROM?.trim() || process.env.EMAIL_USER?.trim();
+  process.env.MAIL_FROM?.trim() ||
+  process.env.EMAIL_FROM?.trim() ||
+  process.env.SMTP_USER?.trim() ||
+  process.env.EMAIL_USER?.trim();
 
 const sendSmtpWithTimeout = async (transporter, mailOptions) => {
   const timeoutMs = readTimeout('EMAIL_SEND_TIMEOUT_MS', 30000);
@@ -170,6 +173,35 @@ const sendOtpEmail = async ({
   return true;
 };
 
+const sendRegistrationOtpEmail = async ({
+  fullName,
+  email,
+  otpCode,
+  expiresInMinutes,
+}) => {
+  await sendConfiguredMail(
+    {
+      to: email,
+      subject: 'Xac minh email dang ky tai khoan',
+      html: `
+        <p>Xin chao ${escapeHtml(fullName || email)},</p>
+        <p>Ma OTP xac minh email dang ky tai khoan cua ban la:</p>
+        <p style="font-size: 28px; font-weight: bold; letter-spacing: 6px">
+          ${escapeHtml(otpCode)}
+        </p>
+        <p>Ma co hieu luc trong ${escapeHtml(expiresInMinutes)} phut.</p>
+        <p>Khong chia se ma OTP nay cho bat ky ai.</p>
+        <p>Neu ban khong thuc hien dang ky, hay bo qua email nay.</p>
+      `,
+      text:
+        `Ma OTP xac minh email dang ky tai khoan: ${otpCode}\n\n` +
+        `Ma co hieu luc trong ${expiresInMinutes} phut. Khong chia se ma OTP nay.`,
+    },
+    { throwWhenMissing: true }
+  );
+  return true;
+};
+
 const sendRecoveryOtpEmail = async ({
   user,
   subject,
@@ -213,6 +245,7 @@ const sendUnlockAccountOtpEmail = (params) =>
 module.exports = {
   sendLoginAlertEmail,
   sendOtpEmail,
+  sendRegistrationOtpEmail,
   sendPasswordResetOtpEmail,
   sendUnlockAccountOtpEmail,
 };

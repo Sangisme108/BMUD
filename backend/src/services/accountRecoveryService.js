@@ -205,6 +205,15 @@ const resetPassword = async ({ email, otpCode, newPassword }) => {
          WHERE user_id = ?`,
         [userId]
       );
+      await connection.query(
+        `UPDATE login_sessions
+         SET is_active = FALSE,
+             revoked_at = NOW(),
+             revoked_reason = 'PASSWORD_RESET'
+         WHERE user_id = ?
+           AND is_active = TRUE`,
+        [userId]
+      );
       await resetVerifiedDevices(userId);
       await recordSecurityEvent({
         userId,

@@ -6,12 +6,18 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import '../models/user.dart';
+import 'device_identity_service.dart';
 
 class ApiException implements Exception {
   final String message;
   final int? statusCode;
+  final String? errorCode;
 
-  const ApiException(this.message, {this.statusCode});
+  const ApiException(
+    this.message, {
+    this.statusCode,
+    this.errorCode,
+  });
 
   @override
   String toString() => message;
@@ -23,12 +29,16 @@ class LoginResult {
 
   const LoginResult({required this.statusCode, required this.data});
 
-  bool get requiresOtp => statusCode == 202;
+  bool get requiresOtp =>
+      statusCode == 202 ||
+      data['requiresOtp'] == true ||
+      data['requires_otp'] == true;
 }
 
 class AuthService {
   static const _storage = FlutterSecureStorage();
   static const _requestTimeout = Duration(seconds: 15);
+  final DeviceIdentityService _deviceIdentity = DeviceIdentityService();
 
   Future<Map<String, dynamic>> register({
     required String fullName,
@@ -50,15 +60,65 @@ class AuthService {
     return data;
   }
 
+  Future<int> sendRegisterOtp({
+    required String fullName,
+    required String email,
+  }) async {
+    final response = await _post('/auth/register/send-otp', {
+      'fullName': fullName,
+      'email': email,
+    });
+    final data = _decode(response);
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        data['message']?.toString() ?? 'Khong the gui OTP dang ky',
+        statusCode: response.statusCode,
+      );
+    }
+    return int.tryParse(data['expiresIn']?.toString() ?? '') ?? 300;
+  }
+
+  Future<Map<String, dynamic>> verifyRegisterOtp({
+    required String fullName,
+    required String email,
+    required String password,
+    required String confirmPassword,
+    required String otp,
+  }) async {
+    final device = await _deviceIdentity.getDevicePayload();
+    final response = await _post('/auth/register/verify-otp', {
+      'fullName': fullName,
+      'email': email,
+      'password': password,
+      'confirmPassword': confirmPassword,
+      'otp': otp,
+      ...device,
+    });
+    final data = _decode(response);
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        data['message']?.toString() ?? 'Xac minh OTP dang ky that bai',
+        statusCode: response.statusCode,
+      );
+    }
+    if (data['access_token'] == null ||
+        data['refresh_token'] == null ||
+        data['user'] == null) {
+      throw const ApiException('May chu khong tra ve phien dang nhap hop le');
+    }
+    await _saveSession(data);
+    return data;
+  }
+
   Future<LoginResult> login({
     required String email,
     required String password,
-    required String deviceFingerprint,
   }) async {
+    final device = await _deviceIdentity.getDevicePayload();
     final response = await _post('/auth/login', {
       'email': email,
       'password': password,
-      'device_fingerprint': deviceFingerprint,
+      ...device,
     });
     final data = _decode(response);
 
@@ -73,18 +133,41 @@ class AuthService {
     throw ApiException(
       data['message']?.toString() ?? _messageForStatus(response.statusCode),
       statusCode: response.statusCode,
+      errorCode: data['errorCode']?.toString(),
     );
+  }
+
+  Future<Map<String, dynamic>> verifyDeviceOtp({
+    required String challengeId,
+    required String otpCode,
+  }) async {
+    final device = await _deviceIdentity.getDevicePayload();
+    final response = await _post('/auth/login/verify-device-otp', {
+      'challengeId': challengeId,
+      'otp': otpCode,
+      ...device,
+    });
+    final data = _decode(response);
+    if (response.statusCode >= 400) {
+      throw ApiException(
+        data['message']?.toString() ?? 'Xác thực OTP thất bại',
+        statusCode: response.statusCode,
+      );
+    }
+
+    await _saveSession(data);
+    return data;
   }
 
   Future<Map<String, dynamic>> verifyOtp({
     required String email,
     required String otpCode,
-    required String deviceFingerprint,
   }) async {
+    final device = await _deviceIdentity.getDevicePayload();
     final response = await _post('/auth/verify-otp', {
       'email': email,
       'otp_code': otpCode,
-      'device_fingerprint': deviceFingerprint,
+      ...device,
     });
     final data = _decode(response);
     if (response.statusCode >= 400) {
@@ -153,31 +236,49 @@ class AuthService {
 
   Future<String?> getToken() => _storage.read(key: 'access_token');
 
+  Future<String?> getSessionId() => _storage.read(key: 'session_id');
+
   Future<bool> refreshSession() async {
     final refreshToken = await _storage.read(key: 'refresh_token');
     if (refreshToken == null) return false;
 
     try {
+      final device = await _deviceIdentity.getDevicePayload();
       final response = await _post('/auth/refresh', {
         'refresh_token': refreshToken,
+        ...device,
       });
       final data = _decode(response);
       if (response.statusCode != 200) {
-        await logout();
+        final errorCode = data['errorCode']?.toString();
+        if (errorCode == 'SESSION_REVOKED' ||
+            errorCode == 'REFRESH_TOKEN_REVOKED') {
+          await clearSession(keepDeviceId: true);
+        } else {
+          await clearSession(keepDeviceId: true);
+        }
         return false;
       }
 
+      final payload = data['data'] is Map<String, dynamic>
+          ? data['data'] as Map<String, dynamic>
+          : data;
+
       await _storage.write(
         key: 'access_token',
-        value: data['access_token']?.toString(),
+        value: payload['access_token']?.toString(),
       );
       await _storage.write(
         key: 'refresh_token',
-        value: data['refresh_token']?.toString(),
+        value: payload['refresh_token']?.toString(),
+      );
+      await _storage.write(
+        key: 'session_id',
+        value: payload['session_id']?.toString(),
       );
       return true;
     } on ApiException {
-      await logout();
+      await clearSession(keepDeviceId: true);
       return false;
     }
   }
@@ -186,14 +287,26 @@ class AuthService {
     final refreshToken = await _storage.read(key: 'refresh_token');
     if (refreshToken != null) {
       try {
-        await _post('/auth/logout', {'refresh_token': refreshToken});
+        final device = await _deviceIdentity.getDevicePayload();
+        await _post('/auth/logout', {
+          'refresh_token': refreshToken,
+          ...device,
+        });
       } on ApiException {
         // Local logout must still succeed when the backend is unavailable.
       }
     }
+    await clearSession(keepDeviceId: true);
+  }
+
+  Future<void> clearSession({required bool keepDeviceId}) async {
     await _storage.delete(key: 'access_token');
     await _storage.delete(key: 'refresh_token');
+    await _storage.delete(key: 'session_id');
     await _storage.delete(key: 'user');
+    if (!keepDeviceId) {
+      await _storage.delete(key: 'device_id');
+    }
   }
 
   Future<void> _saveSession(Map<String, dynamic> data) async {
@@ -204,6 +317,10 @@ class AuthService {
     await _storage.write(
       key: 'refresh_token',
       value: data['refresh_token']?.toString(),
+    );
+    await _storage.write(
+      key: 'session_id',
+      value: data['session_id']?.toString(),
     );
     await _storage.write(key: 'user', value: jsonEncode(data['user']));
   }
@@ -225,7 +342,7 @@ class AuthService {
       return await http
           .post(
             Uri.parse('${ApiConfig.baseUrl}$path'),
-            headers: {'Content-Type': 'application/json'},
+            headers: const {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
           .timeout(_requestTimeout);

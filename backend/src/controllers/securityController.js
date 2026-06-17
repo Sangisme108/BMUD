@@ -96,8 +96,11 @@ const getSecurityEvents = async (req, res, next) => {
 
 const getDevices = async (req, res, next) => {
   try {
-    const devices = await deviceManagementService.listDevices(req.user.id);
-    res.json({ data: devices });
+    const devices = await deviceManagementService.listDevices(
+      req.user.id,
+      req.sessionId || null
+    );
+    res.json({ success: true, data: devices });
   } catch (error) {
     next(error);
   }
@@ -105,9 +108,12 @@ const getDevices = async (req, res, next) => {
 
 const revokeDevice = async (req, res, next) => {
   try {
+    const sessionId = deviceManagementService.resolveDeviceRecordId(
+      req.params.id
+    );
     const result = await deviceManagementService.revokeDevice({
       userId: req.user.id,
-      deviceId: Number(req.params.id),
+      sessionId,
       req,
     });
     res.json(result);

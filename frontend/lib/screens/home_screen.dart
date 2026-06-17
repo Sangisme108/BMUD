@@ -4,11 +4,11 @@ import '../models/social_models.dart';
 import '../models/user.dart';
 import '../services/auth_service.dart';
 import '../services/message_recovery_service.dart';
-import '../services/security_service.dart';
 import '../services/social_service.dart';
 import '../widgets/messenger_avatar.dart';
 import 'account_recovery_request_screen.dart';
 import 'chat_screen.dart';
+import 'devices_screen.dart';
 import 'friends_screen.dart';
 import 'login_history_screen.dart';
 import 'login_screen.dart';
@@ -58,32 +58,41 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final pages = [
       ChatsTab(user: _user),
+      const FriendsScreen(),
       const NotificationsTab(),
       ProfileTab(user: _user, onLogout: _logout),
     ];
 
     return Scaffold(
       body: IndexedStack(index: _selectedIndex, children: pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) {
           setState(() => _selectedIndex = index);
         },
-        destinations: const [
-          NavigationDestination(
+        type: BottomNavigationBarType.fixed,
+        selectedItemColor: Colors.blue,
+        unselectedItemColor: Colors.grey,
+        items: const [
+          BottomNavigationBarItem(
             icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
-            label: 'Đoạn chat',
+            activeIcon: Icon(Icons.chat_bubble),
+            label: 'Chat',
           ),
-          NavigationDestination(
-            icon: Icon(Icons.notifications_outlined),
-            selectedIcon: Icon(Icons.notifications),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.contacts_outlined),
+            activeIcon: Icon(Icons.contacts),
+            label: 'Danh bạ',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.notifications_none),
+            activeIcon: Icon(Icons.notifications),
             label: 'Thông báo',
           ),
-          NavigationDestination(
+          BottomNavigationBarItem(
             icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: 'Tôi',
+            activeIcon: Icon(Icons.person),
+            label: 'Cá nhân',
           ),
         ],
       ),
@@ -212,7 +221,6 @@ class _ChatsTabState extends State<ChatsTab> {
         child: CustomScrollView(
           slivers: [
             SliverToBoxAdapter(child: _buildHeader(context)),
-            SliverToBoxAdapter(child: _buildStories()),
             if (_loading)
               const SliverFillRemaining(
                 child: Center(child: CircularProgressIndicator()),
@@ -310,49 +318,6 @@ class _ChatsTabState extends State<ChatsTab> {
     );
   }
 
-  Widget _buildStories() {
-    final friends = _conversations.take(12).toList();
-    if (friends.isEmpty) {
-      return const SizedBox(height: 8);
-    }
-
-    return SizedBox(
-      height: 96,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        scrollDirection: Axis.horizontal,
-        itemCount: friends.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 14),
-        itemBuilder: (context, index) {
-          final friend = friends[index];
-          return InkWell(
-            borderRadius: BorderRadius.circular(18),
-            onTap: () => _openChat(friend),
-            child: SizedBox(
-              width: 68,
-              child: Column(
-                children: [
-                  MessengerAvatar(
-                    name: friend.fullName,
-                    size: 58,
-                    online: index.isEven,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    friend.fullName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
 }
 
 class _MessageRecoveryCard extends StatelessWidget {
@@ -759,10 +724,9 @@ class ProfileTab extends StatelessWidget {
       _ProfileAction(Icons.devices, 'Thiết bị đã đăng nhập', () {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const RealDevicesScreen()),
+          MaterialPageRoute(builder: (_) => const DevicesScreen()),
         );
       }),
-      _ProfileAction(Icons.verified_user, 'Xác minh 2 lớp (2FA)', () {}),
       _ProfileAction(Icons.password, 'Đổi mật khẩu', () {
         Navigator.push(
           context,
@@ -795,14 +759,12 @@ class ProfileTab extends StatelessWidget {
           MaterialPageRoute(builder: (_) => const FriendsScreen()),
         );
       }),
-      _ProfileAction(Icons.privacy_tip, 'Quyền riêng tư', () {}),
-      _ProfileAction(Icons.security, 'Bảo mật', () {
+      _ProfileAction(Icons.dashboard_customize_outlined, 'Dashboard bảo mật', () {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const SecurityDashboardScreen()),
         );
       }),
-      _ProfileAction(Icons.settings, 'Cài đặt', () {}),
       _ProfileAction(Icons.logout, 'Đăng xuất', onLogout, destructive: true),
     ];
 
@@ -874,158 +836,6 @@ class ProfileTab extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class RealDevicesScreen extends StatefulWidget {
-  const RealDevicesScreen({super.key});
-
-  @override
-  State<RealDevicesScreen> createState() => _RealDevicesScreenState();
-}
-
-class _RealDevicesScreenState extends State<RealDevicesScreen> {
-  final _securityService = SecurityService();
-  late Future<List<Map<String, dynamic>>> _future;
-
-  @override
-  void initState() {
-    super.initState();
-    _future = _securityService.getDevices();
-  }
-
-  Future<void> _reload() async {
-    setState(() => _future = _securityService.getDevices());
-    await _future;
-  }
-
-  Future<void> _revokeDevice(int id) async {
-    try {
-      final message = await _securityService.revokeDevice(id);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
-      );
-      await _reload();
-    } on ApiException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.message)),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Thiết bị đã đăng nhập')),
-      body: FutureBuilder<List<Map<String, dynamic>>>(
-        future: _future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(child: Text(snapshot.error.toString()));
-          }
-
-          final devices = snapshot.data ?? [];
-          if (devices.isEmpty) {
-            return const Center(child: Text('Chưa có thiết bị đăng nhập'));
-          }
-
-          return RefreshIndicator(
-            onRefresh: _reload,
-            child: ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: devices.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (context, index) {
-                final device = devices[index];
-                final os = device['os_name']?.toString() ?? 'Không xác định';
-                final trusted =
-                    device['is_trusted'] == 1 || device['is_trusted'] == true;
-                final recovered = device['message_recovery_verified'] == 1 ||
-                    device['message_recovery_verified'] == true;
-                return Card(
-                  elevation: 0,
-                  child: ListTile(
-                    leading: CircleAvatar(child: Icon(_deviceIcon(os))),
-                    title: Text(device['device_name']?.toString() ?? os),
-                    subtitle: Text(
-                      'Hệ điều hành: $os\n'
-                      'IP: ${device['ip_address'] ?? 'Không rõ'}\n'
-                      'Hoạt động cuối: ${device['last_used_at'] ?? ''}\n'
-                      'Tin cậy: ${trusted ? 'Có' : 'Không'} | '
-                      'Tin nhắn: ${recovered ? 'Đã khôi phục' : 'Chưa khôi phục'}',
-                    ),
-                    trailing: TextButton(
-                      onPressed: trusted
-                          ? () => _revokeDevice(device['id'] as int)
-                          : null,
-                      child: const Text('Gỡ'),
-                    ),
-                  ),
-                );
-              },
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  IconData _deviceIcon(String os) {
-    final raw = os.toLowerCase();
-    if (raw.contains('android')) return Icons.android;
-    if (raw.contains('ios') || raw.contains('iphone')) return Icons.phone_iphone;
-    if (raw.contains('windows') || raw.contains('mac')) return Icons.computer;
-    return Icons.language;
-  }
-}
-
-class DevicesScreen extends StatelessWidget {
-  const DevicesScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final devices = [
-      ('Android', 'Pixel Emulator', '10.0.2.15', 'Đang hoạt động'),
-      ('iPhone', 'iPhone 15', '192.168.1.20', 'Hôm qua'),
-      ('Web Browser', 'Chrome Windows', '103.xxx.xxx.xxx', '3 ngày trước'),
-    ];
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Thiết bị đã đăng nhập')),
-      body: ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: devices.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 10),
-        itemBuilder: (context, index) {
-          final device = devices[index];
-          return Card(
-            elevation: 0,
-            child: ListTile(
-              leading: CircleAvatar(
-                child: Icon(
-                  device.$1 == 'Android'
-                      ? Icons.android
-                      : device.$1 == 'iPhone'
-                          ? Icons.phone_iphone
-                          : Icons.language,
-                ),
-              ),
-              title: Text(device.$2),
-              subtitle: Text('IP: ${device.$3}\nHoạt động cuối: ${device.$4}'),
-              trailing: TextButton(
-                onPressed: () {},
-                child: const Text('Đăng xuất'),
-              ),
-            ),
-          );
-        },
       ),
     );
   }
