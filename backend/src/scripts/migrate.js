@@ -337,6 +337,41 @@ const run = async () => {
     } else {
       console.log('Login sessions migration is already applied.');
     }
+
+    const [[ipLockoutsState]] = await connection.query(
+      `SELECT COUNT(*) AS total
+       FROM information_schema.tables
+       WHERE table_schema = DATABASE()
+         AND table_name = 'ip_device_lockouts'`
+    );
+    if (Number(ipLockoutsState.total) === 0) {
+      const ipLockoutsPath = path.join(
+        __dirname,
+        '..',
+        '..',
+        'migrations',
+        '009_ip_device_lockouts.sql'
+      );
+      const statements = fs
+        .readFileSync(ipLockoutsPath, 'utf8')
+        .split(';')
+        .map((statement) => statement.trim())
+        .filter(Boolean);
+
+      for (const statement of statements) {
+        try {
+          await connection.query(statement);
+        } catch (error) {
+          if (error.code === 'ER_DUP_KEYNAME') {
+            continue;
+          }
+          throw error;
+        }
+      }
+      console.log('IP/device lockouts migration completed.');
+    } else {
+      console.log('IP/device lockouts migration is already applied.');
+    }
   } finally {
     await connection.end();
   }
