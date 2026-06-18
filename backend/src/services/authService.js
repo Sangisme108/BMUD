@@ -766,7 +766,23 @@ const login = async ({
     deviceFingerprint: deviceIdHash,
   });
 
-  if (risk.riskLevel === 'HIGH') {
+  const [[device]] = await pool.query(
+    `SELECT id, is_trusted, revoked_at
+     FROM devices
+     WHERE user_id = ?
+       AND device_fingerprint = ?
+     LIMIT 1`,
+    [user.id, deviceIdHash]
+  );
+
+  const needsDeviceOtp =
+    !device || !device.is_trusted || device.revoked_at != null;
+  const hasRecentPasswordFailures =
+    Number(risk.signals?.recentFailedPasswordCount || 0) >= 3;
+  const canChallengeHighRisk =
+    risk.riskLevel === 'HIGH' && needsDeviceOtp && !hasRecentPasswordFailures;
+
+  if (risk.riskLevel === 'HIGH' && !canChallengeHighRisk) {
     await recordAttempt({
       userId: user.id,
       email: normalizedEmail,
@@ -809,18 +825,6 @@ const login = async ({
     );
   }
 
-  const [[device]] = await pool.query(
-    `SELECT id, is_trusted, revoked_at
-     FROM devices
-     WHERE user_id = ?
-       AND device_fingerprint = ?
-     LIMIT 1`,
-    [user.id, deviceIdHash]
-  );
-
-  const needsDeviceOtp =
-    !device || !device.is_trusted || device.revoked_at != null;
-
   if (needsDeviceOtp) {
     const challenge = await createNewDeviceLoginChallenge({
       user,
@@ -830,6 +834,8 @@ const login = async ({
       operatingSystem,
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
+      riskLevel: risk.riskLevel,
+      reason: risk.reason,
     });
     await recordAttempt({
       userId: user.id,
@@ -838,8 +844,8 @@ const login = async ({
       isSuccessful: false,
       failureType: 'OTP_REQUIRED',
       riskScore: risk.riskScore,
-      riskLevel: 'MEDIUM',
-      reason: 'Thiet bi moi hoac da bi go can xac minh OTP',
+      riskLevel: risk.riskLevel,
+      reason: risk.reason,
     });
     await recordSecurityEvent({
       userId: user.id,
@@ -849,7 +855,8 @@ const login = async ({
       ipAddress: context.ipAddress,
       userAgent: context.userAgent,
       deviceFingerprintHash: deviceIdHash,
-      riskLevel: 'MEDIUM',
+      riskLevel: risk.riskLevel,
+      metadata: { risk_score: risk.riskScore },
     });
 
     return {

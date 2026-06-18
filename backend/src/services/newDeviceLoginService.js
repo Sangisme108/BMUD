@@ -21,6 +21,8 @@ const createNewDeviceLoginChallenge = async ({
   operatingSystem,
   ipAddress,
   userAgent,
+  riskLevel = 'MEDIUM',
+  reason = 'Thiet bi moi hoac chua duoc tin cay can xac minh OTP',
 }) => {
   const deviceIdHash = hashDeviceId(deviceId);
   const challengeId = crypto.randomUUID().replace(/-/g, '');
@@ -64,8 +66,8 @@ const createNewDeviceLoginChallenge = async ({
         email: user.email,
       },
       otpCode,
-      riskLevel: 'MEDIUM',
-      reason: 'Thiet bi moi hoac chua duoc tin cay can xac minh OTP',
+      riskLevel,
+      reason,
       expiresInMinutes: OTP_TTL_MS / 60000,
     });
   } catch (error) {

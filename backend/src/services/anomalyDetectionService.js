@@ -15,6 +15,13 @@ const detectLoginRisk = async ({
 }) => {
   let score = 0;
   const reasons = [];
+  const signals = {
+    untrustedDevice: false,
+    ipChanged: false,
+    userAgentChanged: false,
+    unusualHour: false,
+    recentFailedPasswordCount: 0,
+  };
 
   const [[device]] = await pool.query(
     `SELECT id, is_trusted, revoked_at
@@ -26,6 +33,7 @@ const detectLoginRisk = async ({
 
   if (!device || !device.is_trusted || device.revoked_at) {
     score += 30;
+    signals.untrustedDevice = true;
     reasons.push('Thiết bị mới, chưa được tin cậy hoặc đã bị gỡ');
   }
 
@@ -40,17 +48,20 @@ const detectLoginRisk = async ({
 
   if (lastSuccess && lastSuccess.ip_address !== ipAddress) {
     score += 15;
+    signals.ipChanged = true;
     reasons.push('Địa chỉ IP khác lần đăng nhập thành công gần nhất');
   }
 
   if (lastSuccess && (lastSuccess.user_agent || '') !== userAgent) {
     score += 10;
+    signals.userAgentChanged = true;
     reasons.push('User-Agent khác lần đăng nhập thành công gần nhất');
   }
 
   const currentHour = new Date().getHours();
   if (currentHour >= 1 && currentHour <= 5) {
     score += 10;
+    signals.unusualHour = true;
     reasons.push('Đăng nhập trong khung giờ bất thường từ 01:00 đến 05:59');
   }
 
@@ -65,6 +76,7 @@ const detectLoginRisk = async ({
   );
 
   const failedCount = Number(failedStats.total || 0);
+  signals.recentFailedPasswordCount = failedCount;
   if (failedCount >= 5) {
     score += 40;
     reasons.push('Có ít nhất 5 lần nhập sai mật khẩu trong 15 phút');
@@ -77,6 +89,7 @@ const detectLoginRisk = async ({
     riskScore: score,
     riskLevel: classifyRisk(score),
     reasons,
+    signals,
     reason: reasons.length > 0
       ? reasons.join('; ')
       : 'Không phát hiện dấu hiệu đăng nhập bất thường',
